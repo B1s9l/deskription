@@ -5,7 +5,19 @@ app=${1:?usage: sign-app.sh /path/to/Deskriptions.app}
 root=${0:A:h:h}
 identity=${DESKRIPTIONS_SIGNING_IDENTITY:-}
 require_stable=${DESKRIPTIONS_REQUIRE_STABLE_SIGNING:-0}
+signing_mode=${DESKRIPTIONS_SIGNING_MODE:-development}
 identity_store=${DESKRIPTIONS_SIGNING_IDENTITY_FILE:-"$HOME/Library/Application Support/Deskriptions/signing-identity"}
+distribution_identity=${DESKRIPTIONS_DEVELOPER_ID_SHA1:-1E985D10E686F82AF175C9BCF205D17EA0878240}
+
+if [[ "$signing_mode" == distribution ]]; then
+  identity=${identity:-$distribution_identity}
+  require_stable=1
+  identity_line=$(security find-identity -v -p codesigning 2>/dev/null | grep -E "^[[:space:]]*[0-9]+\) $identity \"Developer ID Application:.*\(9ZGCDZ7YNN\)\"" || true)
+  [[ -n "$identity_line" ]] || {
+    print -u2 "error: required Developer ID Application identity $identity for team 9ZGCDZ7YNN is unavailable."
+    exit 2
+  }
+fi
 
 if [[ -z "$identity" ]]; then
   if [[ -s "$identity_store" ]]; then
@@ -30,11 +42,13 @@ if [[ -z "$identity" ]]; then
 fi
 
 if [[ -n "$identity" ]]; then
-  print "Signing with stable identity: $identity"
+  timestamp_arguments=(--timestamp=none)
+  [[ "$signing_mode" == distribution ]] && timestamp_arguments=(--timestamp)
+  print "Signing in $signing_mode mode with identity: $identity"
   for executable in "$app/Contents/Resources/deskriptions-bridge" "$app/Contents/Resources/deskriptions-bridge-chrome" "$app/Contents/Resources/deskriptions-bridge-brave" "$app/Contents/Resources/deskriptions-bridge-edge"; do
-    [[ -f "$executable" ]] && codesign --force --options runtime --timestamp=none --sign "$identity" "$executable"
+    [[ -f "$executable" ]] && codesign --force --options runtime "${timestamp_arguments[@]}" --sign "$identity" "$executable"
   done
-  codesign --force --options runtime --timestamp=none --entitlements "$root/app/Deskriptions.entitlements" --sign "$identity" --identifier org.deskriptions.app "$app"
+  codesign --force --options runtime "${timestamp_arguments[@]}" --entitlements "$root/app/Deskriptions.entitlements" --sign "$identity" --identifier org.deskriptions.app "$app"
 else
   if [[ "$require_stable" == 1 ]]; then
     print -u2 "error: release packaging requires a stable Apple Development or Developer ID Application identity."
@@ -48,12 +62,22 @@ else
   codesign --force --entitlements "$root/app/Deskriptions.entitlements" --sign - --identifier org.deskriptions.app "$app"
 fi
 
-codesign --verify --deep --strict "$app"
+for executable in "$app/Contents/Resources/deskriptions-bridge" "$app/Contents/Resources/deskriptions-bridge-chrome" "$app/Contents/Resources/deskriptions-bridge-brave" "$app/Contents/Resources/deskriptions-bridge-edge"; do
+  [[ -f "$executable" ]] && codesign --verify --strict --verbose=2 "$executable"
+done
+codesign --verify --strict --verbose=2 "$app"
 if [[ -n "$identity" ]]; then
   team_identifier=$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
   [[ -n "$team_identifier" && "$team_identifier" != "not set" ]] || { print -u2 "error: signed release has no TeamIdentifier"; exit 2; }
   requirement=$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')
   [[ "$requirement" == *"identifier \"org.deskriptions.app\""* ]] || { print -u2 "error: signed app has an unexpected designated requirement"; exit 2; }
+  flags=$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^CodeDirectory.*flags=\([^ ]*\).*/\1/p')
+  [[ "$flags" == *runtime* ]] || { print -u2 "error: Hardened Runtime is not enabled"; exit 2; }
+  if [[ "$signing_mode" == distribution ]]; then
+    timestamp=$(codesign -dvvv "$app" 2>&1 | sed -n 's/^Timestamp=//p')
+    [[ -n "$timestamp" ]] || { print -u2 "error: distribution signature has no secure timestamp"; exit 2; }
+    print "Verified secure timestamp: $timestamp"
+  fi
   print "Verified stable signing team: $team_identifier"
   print "Verified designated requirement: $requirement"
 fi

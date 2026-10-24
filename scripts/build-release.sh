@@ -2,7 +2,7 @@
 set -eu
 
 root=${0:A:h:h}
-version=0.11.1
+version=1.0.0
 stage="$root/.build/release-artifacts/Deskriptions-$version"
 app="$stage/Deskriptions.app"
 cache="$root/.build/release-cache"
@@ -23,14 +23,14 @@ cp "$root/app/Info.plist" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Deskriptions" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier org.deskriptions.app" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 36" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 37" "$app/Contents/Info.plist"
 cp "$root/Assets/AppIcon.iconset/icon_512x512@2x.png" "$app/Contents/Resources/Deskriptions.png"
 chmod 755 "$app/Contents/MacOS/DeskriptionsLab" "$app/Contents/Resources/deskriptions-bridge" "$app/Contents/Resources/deskriptions-bridge-chrome" "$app/Contents/Resources/deskriptions-bridge-brave" "$app/Contents/Resources/deskriptions-bridge-edge"
 if [[ "${DESKRIPTIONS_ALLOW_ADHOC_RELEASE:-0}" == 1 ]]; then
   print -u2 "warning: producing an explicitly requested ad-hoc test package; capture authorization is not persistent across changed builds"
   "$root/scripts/sign-app.sh" "$app"
 else
-  DESKRIPTIONS_REQUIRE_STABLE_SIGNING=1 "$root/scripts/sign-app.sh" "$app"
+  DESKRIPTIONS_REQUIRE_STABLE_SIGNING=1 DESKRIPTIONS_SIGNING_MODE="${DESKRIPTIONS_SIGNING_MODE:-development}" "$root/scripts/sign-app.sh" "$app"
 fi
 
 cp "$root/extension/manifest.json" "$root/extension/service-worker.js" "$root/extension/startup.html" "$stage/Chrome Extension/"
@@ -38,7 +38,7 @@ cp "$root/scripts/install-release-bridge.sh" "$root/scripts/uninstall.sh" "$stag
 cp "$root/native-host/manifest.template.json" "$stage/native-host-manifest.template.json"
 cp "$root/README.md" "$root/docs/API.md" "$root/docs/DESKTOP-FORMAT.md" \
   "$root/docs/TESTER-GUIDE.md" "$root/docs/COMPATIBILITY.md" "$root/docs/KNOWN-ISSUES.md" \
-  "$root/docs/RELEASE-NOTES-0.11.1.md" "$root/docs/PUBLICATION-CHECKLIST.md" "$stage/Documentation/"
+  "$root/docs/RELEASE-NOTES-1.0.0.md" "$root/docs/PUBLICATION-CHECKLIST.md" "$stage/Documentation/"
 cp "$root/THIRD-PARTY-NOTICES.md" "$stage/Documentation/"
 cp "$root/LICENSE" "$stage/Documentation/"
 chmod 755 "$stage/install-release-bridge.sh" "$stage/uninstall.sh"

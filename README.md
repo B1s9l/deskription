@@ -1,14 +1,15 @@
 # Deskriptions
 
-Copyright © 2026 B1s9l. Deskriptions is free software licensed under
-[GNU GPL version 3 only](LICENSE) (`GPL-3.0-only`). You may use, inspect, modify,
-and redistribute it under that license. If you convey a modified version, the
-GPL requires the covered source and corresponding license notices to remain
-available under the GPL; private modifications need not be published merely
-because they were made. See [Third-party notices](THIRD-PARTY-NOTICES.md) for
-platform and asset attribution. Creator: [B1s9l](https://github.com/B1s9l).
+Deskriptions is a free, open-source macOS menu-bar application for keeping useful windows close at hand and returning to a group of work later.
 
-This repository contains a local macOS menu-bar app and Chromium adapter for saving and loading Desktops in Google Chrome, Brave Browser, and Microsoft Edge. In product language, a saved workspace is always a **Desktop**.
+Its two main features are:
+
+- **Live window previews:** Pin a movable, resizable, always-on-top preview of another application's window. A preview can remain visible while you work in another macOS desktop or a fullscreen app—for example, to watch a build, reference a document, or keep a dashboard in view.
+- **Saved Desktops:** Save a collection of supported applications and content, then reopen it later. A Desktop can include Chromium browser windows and tabs, Finder folders, Preview documents, selected Apple Notes, and application-only entries. This is useful when switching projects or resuming a task without reconstructing the same working set by hand.
+
+Deskriptions restores only what each supported integration can identify safely. It does not promise to reproduce every application's internal state, unsaved work, or macOS Space placement. All data stays local, and there are no accounts, cloud services, or telemetry.
+
+Copyright © 2026 [B1s9l](https://github.com/B1s9l). Deskriptions is licensed under [GNU GPL version 3 only](LICENSE) (`GPL-3.0-only`). See [Third-party notices](THIRD-PARTY-NOTICES.md) for platform and asset attribution.
 
 ## Components
 
@@ -40,8 +41,30 @@ For development:
 
 ```sh
 ./scripts/build-app.sh
-open '.build/Deskriptions-0.11.1-build36.app'
+open '.build/Deskriptions-1.0.0-build37.app'
 ```
+
+### Developer ID distribution and notarization
+
+Local development builds and public-distribution builds are separate. A distribution build requires the repository's configured Developer ID Application identity for team `9ZGCDZ7YNN`, enables Hardened Runtime, securely timestamps every embedded bridge and the outer application, and verifies each signature:
+
+```sh
+./scripts/build-distribution.sh
+```
+
+Notarization credentials belong in the login Keychain, never in the repository or an environment file. Create the default profile interactively using an Apple-supported Apple ID or App Store Connect authentication method:
+
+```sh
+xcrun notarytool store-credentials 'Deskriptions-Notarization' --team-id 9ZGCDZ7YNN
+```
+
+After that one-time setup, build, submit, wait for acceptance, save the notarization log, staple and validate the app, run Gatekeeper assessment, and create a metadata-preserving final ZIP with:
+
+```sh
+./scripts/notarize-release.sh
+```
+
+Pass another Keychain profile name as the first argument when needed. The script stops on missing credentials, rejection, failed stapling, invalid signatures, or Gatekeeper rejection. It never stores authentication secrets in the source tree.
 
 Grant **Screen & System Audio Recording** when macOS asks. Apple’s current sample notes that a first-time grant can require quitting and reopening the app. Settings → Diagnostics provides the functional ScreenCaptureKit checks. The default shortcuts are Save Desktop `Control-Option-S`, Load Desktop `Control-Option-L`, and Pin focused window `Control-Option-P`; they can be changed or cleared in Settings → Keyboard Shortcuts.
 
