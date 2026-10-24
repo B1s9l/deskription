@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+DerivedData/
+*.log
+extension/config.js
+native-host/com.deskriptions.bridge.json
+

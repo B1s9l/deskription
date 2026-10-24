@@ -1,0 +1,15 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift tests
+        run: swift test
+      - name: Extension syntax
+        run: node --check extension/service-worker.js
+      - name: Build release candidate
+        run: ./scripts/build-release.sh

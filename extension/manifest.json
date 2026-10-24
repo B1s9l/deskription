@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Deskriptions Chromium Adapter",
+  "version": "0.11.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtdq9Gl2Q0TvudOIcEDhsaqS1xIFwe1RUFdCtw4YmNwJL3GavRCzuW3h3HcHgaOTbyge0r1+KLERqj8IkILxvYUuzEBP4bF51ax3nfix/V6sy69//x/Fxj+Pq94yQOWt7wSlIOKSrzQM3H1EL/5KuDPIcuhzb7iq8xaYfjhp2ucCR6NMrS4Smgq6blWw3JAN01bLUCY+wCdrj8fuQ7ccyKShX8bFyfloROt3abz4oZtv3ejkeYHdcNM68VMXMVXD4nbGkYmbx44WY750VORHbWP//juXcvEyqP89dQh767pjia7LYTmY0q4QwwEPPxT4GPJytd4xPmh5oaezmeK4kowIDAQAB",
+  "description": "Local adapter for saving and loading Deskriptions Desktops in Chrome, Brave, and Microsoft Edge.",
+  "permissions": ["tabs", "windows", "storage", "nativeMessaging", "alarms", "favicon"],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_title": "Reconnect Deskriptions" }
+}
+
