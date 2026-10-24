@@ -10,6 +10,8 @@ app="$stage/Deskriptions.app"
 work="$root/.build/notarization"
 submission_archive="$work/Deskriptions-$version-notarization.zip"
 final_archive="$artifacts/Deskriptions-$version-notarized-macOS.zip"
+extension_archive="$artifacts/Deskriptions-$version-Chrome-extension.zip"
+kit_archive="$artifacts/Deskriptions-$version-beta-kit.zip"
 log="$artifacts/NOTARIZATION-$version.json"
 
 command -v xcrun >/dev/null || { print -u2 "error: Xcode command-line tools are unavailable."; exit 2; }
@@ -40,6 +42,8 @@ codesign --verify --strict --verbose=2 "$app"
 spctl --assess --type execute --verbose=4 "$app"
 
 ditto -c -k --sequesterRsrc --keepParent "$app" "$final_archive"
+rm -f "$kit_archive"
+ditto -c -k --sequesterRsrc --keepParent "$stage" "$kit_archive"
 temporary=$(mktemp -d "$work/verify.XXXXXX")
 ditto -x -k "$final_archive" "$temporary"
 codesign --verify --strict --verbose=2 "$temporary/Deskriptions.app"
@@ -48,7 +52,7 @@ spctl --assess --type execute --verbose=4 "$temporary/Deskriptions.app"
 rm -rf "$temporary"
 
 cd "$artifacts"
-shasum -a 256 "${final_archive:t}" > "SHA256SUMS-$version-notarized.txt"
+shasum -a 256 "${final_archive:t}" "${extension_archive:t}" "${kit_archive:t}" > "SHA256SUMS-$version-notarized.txt"
 print "Accepted submission: $submission_id"
 print "Final archive: $final_archive"
 print "Notarization log: $log"
