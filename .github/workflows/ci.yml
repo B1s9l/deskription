@@ -11,5 +11,5 @@ jobs:
         run: swift test
       - name: Extension syntax
         run: node --check extension/service-worker.js
-      - name: Build release candidate
-        run: ./scripts/build-release.sh
+      - name: Build release binaries
+        run: swift build -c release --product DeskriptionsLab && swift build -c release --product deskriptions-bridge

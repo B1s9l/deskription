@@ -28,20 +28,24 @@ Requirements: macOS 15+, Xcode 16+, and at least one supported Chromium browser 
 
 Artifacts and SHA-256 checksums are written under `.build/release-artifacts/`. The release app embeds its native bridge; the included `install-release-bridge.sh` registers that stable embedded path after the app is moved to `/Applications`.
 
-Release packaging requires an Apple Development or Developer ID Application
-certificate so macOS can retain Screen Recording authorization across rebuilt
-binaries. On the first build, the signing script pins the selected certificate
-fingerprint in `~/Library/Application Support/Deskriptions/signing-identity` and
+Every app build requires a signing certificate so macOS can retain Screen
+Recording authorization across rebuilt binaries. Development builds select an
+`Apple Development` certificate for team `9ZGCDZ7YNN`; public distribution
+builds select `Developer ID Application` for that team. On the first build of
+each mode, the signing script pins the selected certificate fingerprint in
+`~/Library/Application Support/Deskriptions/signing-identity-development` or
+`signing-identity-distribution` and
 reuses it for every development and release build. Set
 `DESKRIPTIONS_SIGNING_IDENTITY` to a certificate fingerprint to override that
-selection deliberately. Development app builds may use ad-hoc signing only when
-no valid identity exists; release packaging refuses that fallback.
+selection deliberately. Builds fail instead of silently falling back to ad-hoc
+signing when the required identity is unavailable. Create or download the
+certificates once in Xcode under Settings > Accounts > Manage Certificates.
 
 For development:
 
 ```sh
 ./scripts/build-app.sh
-open '.build/Deskriptions-1.0.0-build37.app'
+open '.build/Deskriptions-1.0.1-build38.app'
 ```
 
 ### Developer ID distribution and notarization

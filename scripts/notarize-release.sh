@@ -2,7 +2,7 @@
 set -eu
 
 root=${0:A:h:h}
-version=1.0.0
+version=1.0.1
 profile=${1:-${DESKRIPTIONS_NOTARY_PROFILE:-Deskriptions-Notarization}}
 artifacts="$root/.build/release-artifacts"
 stage="$artifacts/Deskriptions-$version"

@@ -4,25 +4,25 @@ set -eu
 app=${1:?usage: sign-app.sh /path/to/Deskriptions.app}
 root=${0:A:h:h}
 identity=${DESKRIPTIONS_SIGNING_IDENTITY:-}
-require_stable=${DESKRIPTIONS_REQUIRE_STABLE_SIGNING:-0}
+require_stable=${DESKRIPTIONS_REQUIRE_STABLE_SIGNING:-1}
 signing_mode=${DESKRIPTIONS_SIGNING_MODE:-development}
-identity_store=${DESKRIPTIONS_SIGNING_IDENTITY_FILE:-"$HOME/Library/Application Support/Deskriptions/signing-identity"}
-distribution_identity=${DESKRIPTIONS_DEVELOPER_ID_SHA1:-1E985D10E686F82AF175C9BCF205D17EA0878240}
+team_id=${DESKRIPTIONS_DEVELOPMENT_TEAM:-9ZGCDZ7YNN}
+
+case "$signing_mode" in
+  development) certificate_kind="Apple Development" ;;
+  distribution) certificate_kind="Developer ID Application" ;;
+  *) print -u2 "error: unsupported signing mode '$signing_mode' (expected development or distribution)."; exit 2 ;;
+esac
+identity_store=${DESKRIPTIONS_SIGNING_IDENTITY_FILE:-"$HOME/Library/Application Support/Deskriptions/signing-identity-$signing_mode"}
 
 if [[ "$signing_mode" == distribution ]]; then
-  identity=${identity:-$distribution_identity}
   require_stable=1
-  identity_line=$(security find-identity -v -p codesigning 2>/dev/null | grep -E "^[[:space:]]*[0-9]+\) $identity \"Developer ID Application:.*\(9ZGCDZ7YNN\)\"" || true)
-  [[ -n "$identity_line" ]] || {
-    print -u2 "error: required Developer ID Application identity $identity for team 9ZGCDZ7YNN is unavailable."
-    exit 2
-  }
 fi
 
 if [[ -z "$identity" ]]; then
   if [[ -s "$identity_store" ]]; then
     pinned=$(tr -d '[:space:]' < "$identity_store")
-    if security find-identity -v -p codesigning 2>/dev/null | grep -q "^[[:space:]]*[0-9]*) $pinned \""; then
+    if security find-identity -v -p codesigning 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\) $pinned \"$certificate_kind:"; then
       identity=$pinned
     fi
   fi
@@ -30,7 +30,7 @@ if [[ -z "$identity" ]]; then
     # Pin the certificate fingerprint, not its display name. Xcode commonly
     # creates multiple certificates with the same name, and asking codesign to
     # resolve that name can silently change the app's signing requirement.
-    identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -nE '/"(Developer ID Application|Apple Development):/s/^[[:space:]]*[0-9]+\) ([0-9A-F]{40}) .*/\1/p' | head -n 1)
+    identity=$(security find-identity -v -p codesigning 2>/dev/null | sed -nE "/\"$certificate_kind:/s/^[[:space:]]*[0-9]+\\) ([0-9A-F]{40}) .*/\\1/p" | head -n 1)
     if [[ -n "$identity" ]]; then
       mkdir -p "${identity_store:h}"
       temporary="$identity_store.tmp.$$"
@@ -39,6 +39,11 @@ if [[ -z "$identity" ]]; then
       mv -f "$temporary" "$identity_store"
     fi
   fi
+fi
+
+if [[ -n "$identity" ]] && ! security find-identity -v -p codesigning 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\) $identity \"$certificate_kind:"; then
+  print -u2 "error: signing identity '$identity' is not a valid '$certificate_kind' certificate."
+  exit 2
 fi
 
 if [[ -n "$identity" ]]; then
@@ -51,8 +56,9 @@ if [[ -n "$identity" ]]; then
   codesign --force --options runtime "${timestamp_arguments[@]}" --entitlements "$root/app/Deskriptions.entitlements" --sign "$identity" --identifier org.deskriptions.app "$app"
 else
   if [[ "$require_stable" == 1 ]]; then
-    print -u2 "error: release packaging requires a stable Apple Development or Developer ID Application identity."
-    print -u2 "Create/import the certificate, or set DESKRIPTIONS_SIGNING_IDENTITY to its SHA-1 fingerprint."
+    print -u2 "error: no valid '$certificate_kind' identity for Apple team $team_id was found in the keychain."
+    print -u2 "Open Xcode > Settings > Accounts > Manage Certificates and create/download the required certificate."
+    print -u2 "Alternatively set DESKRIPTIONS_SIGNING_IDENTITY to its SHA-1 fingerprint."
     exit 2
   fi
   print -u2 "warning: no code-signing identity found; using ad-hoc signing. macOS capture permission will need to be granted again after every rebuild."
@@ -68,7 +74,7 @@ done
 codesign --verify --strict --verbose=2 "$app"
 if [[ -n "$identity" ]]; then
   team_identifier=$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
-  [[ -n "$team_identifier" && "$team_identifier" != "not set" ]] || { print -u2 "error: signed release has no TeamIdentifier"; exit 2; }
+  [[ "$team_identifier" == "$team_id" ]] || { print -u2 "error: signed app has team '$team_identifier', expected '$team_id'"; exit 2; }
   requirement=$(codesign -d -r- "$app" 2>&1 | sed -n 's/^designated => //p')
   [[ "$requirement" == *"identifier \"org.deskriptions.app\""* ]] || { print -u2 "error: signed app has an unexpected designated requirement"; exit 2; }
   flags=$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^CodeDirectory.*flags=\([^ ]*\).*/\1/p')
