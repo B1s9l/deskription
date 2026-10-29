@@ -22,6 +22,8 @@ Messages contain `type`, `protocolVersion`, and caller UUID `requestID`. State a
 
 Inventory on connection registers identity and advertises `inventory.windows`, `inventory.tabs`, `inventory.fresh`, `close.selected.v1`, `restore.reconciled.v1`, `restore.startup-window.v1`, and `cancel.v1`. Unknown capabilities are ignored. Protocol mismatch returns `incompatible_protocol`; adapter state migration uses `savedStateVersion`.
 
+Compatibility is determined by the numeric adapter protocol, verified native-host browser identity, supported browser bundle ID, and required `inventory.windows`, `inventory.tabs`, and `inventory.fresh` capabilities. `adapterVersion` is the independently versioned extension release and is diagnostic only: for example, extension release 1.0.0 remains compatible with app release 1.0.5 when both speak protocol v1 and provide the required capabilities. Optional capability absence disables only its related enhancement.
+
 ## Inventory and association
 
 `freshInventory` returns ordered tabs with URL, title, active/pinned state and window bounds/state. Save requests freshness again at commit and aborts if selected identities disappear or move.

@@ -68,6 +68,10 @@ final class SettingsController: NSObject, NSWindowDelegate {
         return false
     }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshExtensions(); refreshDiagnostics()
+    }
+
     func runLifecycleStress(cycles: Int) async -> Bool {
         show()
         guard let expectedWindow = window else { return false }
@@ -90,20 +94,20 @@ final class SettingsController: NSObject, NSWindowDelegate {
         let v = page(); heading("General", y: 445, in: v)
         let title = NSTextField(labelWithString: "Default Save Desktop selection:"); title.frame = NSRect(x: 24, y: 390, width: 230, height: 24); v.addSubview(title)
         let popup = NSPopUpButton(frame: NSRect(x: 255, y: 386, width: 220, height: 30)); popup.addItems(withTitles: ["Visible windows", "All supported windows"]); popup.selectItem(at: UserDefaults.standard.bool(forKey: "initialSelectionAll") ? 1 : 0); popup.target = self; popup.action = #selector(selectionChanged(_:)); v.addSubview(popup)
-        let afterTitle = NSTextField(labelWithString: "After saving a Desktop:"); afterTitle.frame = NSRect(x: 24, y: 340, width: 230, height: 24); v.addSubview(afterTitle)
-        let afterPopup = NSPopUpButton(frame: NSRect(x: 255, y: 336, width: 220, height: 30)); afterPopup.addItems(withTitles: AfterSaveBehavior.allCases.map(\.title)); let existing = ((try? DesktopStore.applicationSupport())?.list().desktops.isEmpty == false); let selected = afterSavePreferences.behavior(hasExistingDesktops: existing); afterPopup.selectItem(at: AfterSaveBehavior.allCases.firstIndex(of: selected) ?? 2); afterPopup.target = self; afterPopup.action = #selector(afterSaveChanged(_:)); afterPopup.setAccessibilityLabel("After saving a Desktop"); v.addSubview(afterPopup)
-        let afterHelp = NSTextField(wrappingLabelWithString: "Keep selected content open, safely close content supported by an integration, or choose after each successful save."); afterHelp.frame = NSRect(x: 255, y: 300, width: 410, height: 32); afterHelp.textColor = .secondaryLabelColor; v.addSubview(afterHelp)
-        let login = NSButton(checkboxWithTitle: "Launch at login", target: self, action: #selector(toggleLogin(_:))); login.frame = NSRect(x: 24, y: 265, width: 200, height: 24); login.state = SMAppService.mainApp.status == .enabled ? .on : .off; v.addSubview(login)
-        let status = NSTextField(wrappingLabelWithString: ""); status.frame = NSRect(x: 44, y: 225, width: 610, height: 38); status.textColor = .secondaryLabelColor; v.addSubview(status); loginStatus = status
+        let afterTitle = NSTextField(labelWithString: "After saving a Desktop:"); afterTitle.frame = NSRect(x: 24, y: 330, width: 230, height: 24); v.addSubview(afterTitle)
+        let afterPopup = NSPopUpButton(frame: NSRect(x: 255, y: 326, width: 220, height: 30)); afterPopup.addItems(withTitles: AfterSaveBehavior.allCases.map(\.title)); let existing = ((try? DesktopStore.applicationSupport())?.list().desktops.isEmpty == false); let selected = afterSavePreferences.behavior(hasExistingDesktops: existing); afterPopup.selectItem(at: AfterSaveBehavior.allCases.firstIndex(of: selected) ?? 2); afterPopup.target = self; afterPopup.action = #selector(afterSaveChanged(_:)); afterPopup.setAccessibilityLabel("After saving a Desktop"); v.addSubview(afterPopup)
+        let afterHelp = NSTextField(wrappingLabelWithString: "Keep selected content open, safely close content supported by an integration, or choose after each successful save."); afterHelp.frame = NSRect(x: 255, y: 290, width: 410, height: 32); afterHelp.textColor = .secondaryLabelColor; v.addSubview(afterHelp)
+        let login = NSButton(checkboxWithTitle: "Launch at login", target: self, action: #selector(toggleLogin(_:))); login.frame = NSRect(x: 24, y: 240, width: 200, height: 24); login.state = SMAppService.mainApp.status == .enabled ? .on : .off; v.addSubview(login)
+        let status = NSTextField(wrappingLabelWithString: ""); status.frame = NSRect(x: 44, y: 200, width: 610, height: 38); status.textColor = .secondaryLabelColor; v.addSubview(status); loginStatus = status
 
-        let management = NSTextField(labelWithString: "Saved Desktops"); management.font = .systemFont(ofSize: 13, weight: .semibold); management.frame = NSRect(x: 24, y: 194, width: 180, height: 22); v.addSubview(management)
-        let count = NSTextField(labelWithString: ""); count.textColor = .secondaryLabelColor; count.frame = NSRect(x: 155, y: 194, width: 200, height: 22); v.addSubview(count); savedDesktopCountLabel = count
-        let auto = NSButton(checkboxWithTitle: "Auto delete old saved Desktops", target: self, action: #selector(toggleAutoDelete(_:))); auto.frame = NSRect(x: 24, y: 159, width: 250, height: 24); auto.state = retentionPreferences.isEnabled ? .on : .off; v.addSubview(auto); autoDeleteToggle = auto
-        let slider = NSSlider(value: Double(retentionPreferences.limit), minValue: Double(DesktopRetentionPreferences.allowedLimits.lowerBound), maxValue: Double(DesktopRetentionPreferences.allowedLimits.upperBound), target: self, action: #selector(retentionSliderChanged(_:))); slider.numberOfTickMarks = 0; slider.allowsTickMarkValuesOnly = false; slider.frame = NSRect(x: 44, y: 119, width: 315, height: 24); v.addSubview(slider); retentionSlider = slider
-        let limit = NSTextField(labelWithString: "Keep newest \(retentionPreferences.limit)"); limit.frame = NSRect(x: 370, y: 119, width: 120, height: 24); v.addSubview(limit); retentionValueLabel = limit
-        let saveLimit = NSButton(title: "Save limit", target: self, action: #selector(saveRetentionLimit)); saveLimit.frame = NSRect(x: 495, y: 114, width: 100, height: 30); v.addSubview(saveLimit)
-        let deleteAll = NSButton(title: "Delete All Saved Desktops…", target: self, action: #selector(deleteAllSavedDesktops)); deleteAll.frame = NSRect(x: 24, y: 68, width: 220, height: 32); deleteAll.hasDestructiveAction = true; v.addSubview(deleteAll)
-        let deletionHelp = NSTextField(labelWithString: "Deletes saved records only; applications, tabs, folders, settings, and the naming counter are unchanged."); deletionHelp.textColor = .secondaryLabelColor; deletionHelp.frame = NSRect(x: 255, y: 74, width: 430, height: 20); v.addSubview(deletionHelp)
+        let management = NSTextField(labelWithString: "Saved Desktops"); management.font = .systemFont(ofSize: 13, weight: .semibold); management.frame = NSRect(x: 24, y: 169, width: 180, height: 22); v.addSubview(management)
+        let count = NSTextField(labelWithString: ""); count.textColor = .secondaryLabelColor; count.frame = NSRect(x: 155, y: 169, width: 200, height: 22); v.addSubview(count); savedDesktopCountLabel = count
+        let auto = NSButton(checkboxWithTitle: "Auto delete old saved Desktops", target: self, action: #selector(toggleAutoDelete(_:))); auto.frame = NSRect(x: 24, y: 134, width: 250, height: 24); auto.state = retentionPreferences.isEnabled ? .on : .off; v.addSubview(auto); autoDeleteToggle = auto
+        let slider = NSSlider(value: Double(retentionPreferences.limit), minValue: Double(DesktopRetentionPreferences.allowedLimits.lowerBound), maxValue: Double(DesktopRetentionPreferences.allowedLimits.upperBound), target: self, action: #selector(retentionSliderChanged(_:))); slider.numberOfTickMarks = 0; slider.allowsTickMarkValuesOnly = false; slider.frame = NSRect(x: 44, y: 94, width: 315, height: 24); v.addSubview(slider); retentionSlider = slider
+        let limit = NSTextField(labelWithString: "Keep newest \(retentionPreferences.limit)"); limit.frame = NSRect(x: 370, y: 94, width: 120, height: 24); v.addSubview(limit); retentionValueLabel = limit
+        let saveLimit = NSButton(title: "Save limit", target: self, action: #selector(saveRetentionLimit)); saveLimit.frame = NSRect(x: 495, y: 89, width: 100, height: 30); v.addSubview(saveLimit)
+        let deleteAll = NSButton(title: "Delete All Saved Desktops…", target: self, action: #selector(deleteAllSavedDesktops)); deleteAll.frame = NSRect(x: 24, y: 43, width: 220, height: 32); deleteAll.hasDestructiveAction = true; v.addSubview(deleteAll)
+        let deletionHelp = NSTextField(labelWithString: "Deletes saved records only; applications, tabs, folders, settings, and the naming counter are unchanged."); deletionHelp.textColor = .secondaryLabelColor; deletionHelp.frame = NSRect(x: 255, y: 49, width: 430, height: 20); v.addSubview(deletionHelp)
         return v
     }
     @objc private func selectionChanged(_ sender: NSPopUpButton) { UserDefaults.standard.set(sender.indexOfSelectedItem == 1, forKey: "initialSelectionAll") }
@@ -253,15 +257,14 @@ final class SettingsController: NSObject, NSWindowDelegate {
             for registration in observed {
                 guard let profile = registration.hello else { continue }
                 let handshake = handshakeFormatter.string(from: registration.lastSeen)
-                let packagedVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-                let versionMatches = profile.adapterVersion == packagedVersion && registration.compatibility == .compatible
-                let connected = registration.isConnected && versionMatches
-                let state = registration.isConnected ? (versionMatches ? "Connected" : "Connected, incompatible") : "Disconnected"
+                let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+                let compatibilityResult = AdapterCompatibility.evaluate(profile)
+                let connected = registration.isConnected && compatibilityResult.isCompatible
+                let state = registration.isConnected ? (compatibilityResult.isCompatible ? "Connected" : "Connected, incompatible") : "Disconnected"
                 let age = registration.isConnected ? "last handshake \(handshake)" : "last seen \(handshake); handshake expired"
                 let capabilities = profile.capabilities.sorted().joined(separator: ", ")
-                let compatibility = versionMatches ? "compatible with app v\(packagedVersion ?? "unknown")" : "adapter v\(profile.adapterVersion ?? "unknown") does not match app v\(packagedVersion ?? "unknown")"
                 let detail = "● \(state) · \(age)"
-                let metadata = "External extension · profile \(profile.installationID.prefix(8)) · \(compatibility)\nCapabilities: \(capabilities.isEmpty ? "none reported" : capabilities)"
+                let metadata = "External extension · adapter v\(profile.adapterVersion ?? "unknown") · app v\(appVersion) · \(compatibilityResult.explanation) · profile \(profile.installationID.prefix(8))\nCapabilities: \(capabilities.isEmpty ? "none reported" : capabilities)"
                 let row = extensionRow(title: browser.displayName + " extension", detail: detail, green: connected, bundleID: browser.rawValue, metadata: metadata, profile: profile)
                 let migrated = configuredPath(for: profile)
                 if let field = row.viewWithTag(42) as? NSTextField { field.stringValue = migrated ?? "" }
@@ -278,9 +281,13 @@ final class SettingsController: NSObject, NSWindowDelegate {
         for registration in registrations where registration.compatibility == .malformed {
             stack.addArrangedSubview(extensionRow(title: "Unrecognized extension registration", detail: "● Disconnected · handshake data is malformed", green: false, metadata: "External extension · last seen \(handshakeFormatter.string(from: registration.lastSeen)) · reload the supported browser extension"))
         }
+        let previewRow = extensionRow(title: "Preview documents", detail: AXIsProcessTrusted() ? "● Available · Accessibility access granted" : "● Unavailable · Accessibility access is required for exact documents", green: AXIsProcessTrusted(), bundleID: PreviewAdapter.bundleIdentifier, metadata: AXIsProcessTrusted() ? "Native integration · exact AXDocument file identity, Preview-specific opening, and verification" : "Native integration · choose Grant Access, approve the running /Applications/Deskriptions.app in Privacy & Security → Accessibility, then relaunch Deskriptions if macOS does not apply the grant immediately", actionTitle: AXIsProcessTrusted() ? "Recheck" : "Grant Access…", action: #selector(grantPreviewAccessibility))
+        let powerPointInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: PowerPointAdapter.bundleIdentifier) != nil
+        let powerPointRow = extensionRow(title: "Microsoft PowerPoint presentations", detail: powerPointInstalled ? "● Available · Automation permission requested when used" : "● Unavailable · Microsoft PowerPoint is not installed", green: powerPointInstalled, bundleID: PowerPointAdapter.bundleIdentifier, metadata: "Native integration · exact presentation full-name identity, explicit PowerPoint opening, and verification. If access was denied, enable Deskriptions → Microsoft PowerPoint in Privacy & Security → Automation.", actionTitle: powerPointInstalled ? "Open Settings…" : nil, action: powerPointInstalled ? #selector(openAutomationSettings) : nil)
         for row in [
             extensionRow(title: "Finder folders", detail: "● Available · Automation permission requested when used", green: true, bundleID: "com.apple.finder", metadata: "Native integration · exact folder identity and reopening"),
-            extensionRow(title: "Preview documents", detail: AXIsProcessTrusted() ? "● Available · Accessibility access granted" : "● Unavailable · grant Accessibility access for exact documents", green: AXIsProcessTrusted(), bundleID: PreviewAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument file identity, Preview-specific opening, and verification"),
+            previewRow,
+            powerPointRow,
             extensionRow(title: "Apple Notes", detail: "● Available · Automation permission requested when used", green: true, bundleID: NotesAdapter.bundleIdentifier, metadata: "Native integration · selected-note identity only"),
             extensionRow(title: "Application-only fallback", detail: "● Available · no additional permission required", green: true, metadata: "Native integration · launches applications; does not restore document or window contents")
         ] { stack.addArrangedSubview(row) }
@@ -299,7 +306,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
         ProfileConfigurationStore.set(path, browser: profile.browser, installationID: profile.installationID)
         return path
     }
-    private func extensionRow(title: String, detail: String, green: Bool, bundleID: String? = nil, metadata: String, profile: ExtensionHello? = nil, profileIdentity: String? = nil) -> NSView {
+    private func extensionRow(title: String, detail: String, green: Bool, bundleID: String? = nil, metadata: String, profile: ExtensionHello? = nil, profileIdentity: String? = nil, actionTitle: String? = nil, action: Selector? = nil) -> NSView {
         let hasProfile = profile != nil || profileIdentity != nil
         let row = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: hasProfile ? 112 : 76)); row.translatesAutoresizingMaskIntoConstraints = false
         let icon = NSImageView(); icon.translatesAutoresizingMaskIntoConstraints = false
@@ -308,10 +315,17 @@ final class SettingsController: NSObject, NSWindowDelegate {
         let d = NSTextField(labelWithString: detail); d.translatesAutoresizingMaskIntoConstraints = false; d.textColor = green ? .systemGreen : .systemRed
         let m = NSTextField(wrappingLabelWithString: metadata); m.translatesAutoresizingMaskIntoConstraints = false; m.textColor = .secondaryLabelColor; m.maximumNumberOfLines = 2
         row.addSubview(icon); row.addSubview(t); row.addSubview(d); row.addSubview(m)
+        var titleTrailing = t.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6)
+        if let actionTitle, let action {
+            let button = NSButton(title: actionTitle, target: self, action: action); button.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(button)
+            titleTrailing = t.trailingAnchor.constraint(lessThanOrEqualTo: button.leadingAnchor, constant: -8)
+            NSLayoutConstraint.activate([button.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6), button.topAnchor.constraint(equalTo: row.topAnchor), button.widthAnchor.constraint(greaterThanOrEqualToConstant: 92)])
+        }
         NSLayoutConstraint.activate([
             row.heightAnchor.constraint(equalToConstant: hasProfile ? 112 : 76),
             icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 6), icon.topAnchor.constraint(equalTo: row.topAnchor, constant: 7), icon.widthAnchor.constraint(equalToConstant: 28), icon.heightAnchor.constraint(equalToConstant: 28),
-            t.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), t.topAnchor.constraint(equalTo: row.topAnchor, constant: 4), t.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6),
+            t.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), t.topAnchor.constraint(equalTo: row.topAnchor, constant: 4), titleTrailing,
             d.leadingAnchor.constraint(equalTo: t.leadingAnchor), d.topAnchor.constraint(equalTo: t.bottomAnchor, constant: 1), d.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6),
             m.leadingAnchor.constraint(equalTo: t.leadingAnchor), m.topAnchor.constraint(equalTo: d.bottomAnchor, constant: 1), m.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6)
         ])
@@ -321,6 +335,32 @@ final class SettingsController: NSObject, NSWindowDelegate {
             NSLayoutConstraint.activate([field.leadingAnchor.constraint(equalTo: t.leadingAnchor), field.topAnchor.constraint(equalTo: m.bottomAnchor, constant: 4), field.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6), field.heightAnchor.constraint(equalToConstant: 24)])
         }
         return row
+    }
+    @objc private func grantPreviewAccessibility() {
+        if !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self else { return }
+                if !AXIsProcessTrusted(), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+                self.refreshExtensions(); self.refreshDiagnostics()
+            }
+            Task { @MainActor [weak self] in
+                for _ in 0..<15 {
+                    try? await Task.sleep(for: .seconds(2))
+                    guard let self else { return }
+                    self.refreshExtensions(); self.refreshDiagnostics()
+                    if AXIsProcessTrusted() { return }
+                }
+            }
+        } else {
+            refreshExtensions(); refreshDiagnostics()
+        }
+    }
+    @objc private func openAutomationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") { NSWorkspace.shared.open(url) }
     }
     @objc private func profilePathChanged(_ sender: NSTextField) { guard let identity = sender.identifier?.rawValue, let split = identity.firstIndex(of: "|") else { return }; let browser = String(identity[..<split]), id = String(identity[identity.index(after: split)...]); let path = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines); if !path.isEmpty && !path.hasPrefix("/") { show("Profile Path must be a complete absolute path."); return }; ProfileConfigurationStore.set(path.isEmpty ? nil : path, browser: browser, installationID: id) }
     @objc private func openProject() { NSWorkspace.shared.open(URL(string: "https://github.com/B1s9l/deskription")!) }

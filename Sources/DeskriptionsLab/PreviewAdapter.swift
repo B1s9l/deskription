@@ -2,15 +2,13 @@ import AppKit
 import ApplicationServices
 import DeskriptionsCore
 
-struct PreviewDocumentObservation: Equatable {
-    let path: String
-    let displayName: String
-    let onScreen: Bool
-}
+typealias PreviewDocumentObservation = DocumentObservation
 
 @MainActor
-final class PreviewAdapter {
+final class PreviewAdapter: DocumentDiscoveryAdapter {
     static let bundleIdentifier = "com.apple.Preview"
+    let applicationBundleID = PreviewAdapter.bundleIdentifier
+    let applicationDisplayName = "Preview"
     enum AdapterError: LocalizedError {
         case accessibilityRequired, identityUnavailable, unavailable(String), verificationFailed(String), automation(String)
         var errorDescription: String? {
@@ -26,52 +24,68 @@ final class PreviewAdapter {
 
     func inventory() throws -> [PreviewDocumentObservation] {
         guard AXIsProcessTrusted() else { throw AdapterError.accessibilityRequired }
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).first else { return [] }
-        let application = AXUIElementCreateApplication(app.processIdentifier)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return [] }
-        let native = nativeWindows(pid: app.processIdentifier)
-        let observations: [PreviewDocumentObservation] = windows.compactMap { window -> PreviewDocumentObservation? in
-            guard let document = stringAttribute(kAXDocumentAttribute, of: window), let url = documentURL(document), url.isFileURL else { return nil }
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).filter { !$0.isTerminated }
+        guard !applications.isEmpty else { return [] }
+        var sawWindow = false
+        let observations = applications.flatMap { app -> [PreviewDocumentObservation] in
+            let application = AXUIElementCreateApplication(app.processIdentifier)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement] else { return [] }
+            if !windows.isEmpty { sawWindow = true }
+            let native = nativeWindows(pid: app.processIdentifier)
+            return windows.compactMap { window -> PreviewDocumentObservation? in
+            guard let document = attribute(kAXDocumentAttribute, of: window), let url = documentURL(document), url.isFileURL else { return nil }
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
                   FileManager.default.isReadableFile(atPath: url.path) else { return nil }
             let minimized = boolAttribute(kAXMinimizedAttribute, of: window) ?? false
             let frame = windowFrame(window)
             let onScreen = !app.isHidden && !minimized && frame.map { candidate in native.contains { approximatelyEqual($0, candidate) && $0.onScreen } } == true
-            return PreviewDocumentObservation(path: url.standardizedFileURL.path, displayName: url.lastPathComponent, onScreen: onScreen)
+            return PreviewDocumentObservation(applicationBundleID: Self.bundleIdentifier, applicationBundlePath: app.bundleURL?.path, path: url.standardizedFileURL.path, displayName: url.lastPathComponent, onScreen: onScreen, identityMetadata: ["discovery": "AXDocument"])
+            }
         }
         let unique = observations.reduce(into: [PreviewDocumentObservation]()) { values, item in if !values.contains(where: { $0.path == item.path }) { values.append(item) } }
-        if !windows.isEmpty && unique.isEmpty { throw AdapterError.identityUnavailable }
+        if sawWindow && unique.isEmpty { throw AdapterError.identityUnavailable }
         return unique
     }
 
-    func restore(_ saved: SavedPreviewDocument) async throws -> PreviewDocumentObservation {
-        guard saved.applicationBundleID == Self.bundleIdentifier else { throw AdapterError.unavailable("unsupported application identity \(saved.applicationBundleID)") }
-        let url = URL(fileURLWithPath: saved.path).standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
-              FileManager.default.isReadableFile(atPath: url.path) else { throw AdapterError.unavailable(saved.path) }
-        if let existing = try inventory().first(where: { $0.path == url.path }) { try raise(path: url.path); return existing }
-        guard let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleIdentifier) else { throw AdapterError.unavailable("Preview.app") }
-        let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = true
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.open([url], withApplicationAt: preview, configuration: configuration) { _, error in
-                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
-            }
-        }
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
-            if let verified = try? inventory().first(where: { $0.path == url.path }) { try raise(path: url.path); return verified }
-            try? await Task.sleep(for: .milliseconds(250))
-        }
-        throw AdapterError.verificationFailed(saved.path)
+    /// Preview may publish its window before `AXWindows`/`AXDocument` is ready.
+    /// A bounded retry prevents a transient launch or tab transition from being
+    /// misreported as application-only restoration.
+    func inventoryWithRetry() async throws -> [PreviewDocumentObservation] {
+        try await inventoryWithRetry(timeout: .seconds(8))
     }
 
-    func close(_ saved: SavedPreviewDocument) async throws -> Bool {
-        guard AXIsProcessTrusted(), let app = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).first else { return false }
-        guard let window = matchingWindow(path: saved.path, pid: app.processIdentifier) else { return false }
+    func inventoryWithRetry(timeout: Duration) async throws -> [PreviewDocumentObservation] {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        var lastError: Error?
+        repeat {
+            do {
+                let documents = try inventory()
+                if !documents.isEmpty || NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).isEmpty { return documents }
+            } catch AdapterError.accessibilityRequired {
+                throw AdapterError.accessibilityRequired
+            } catch {
+                lastError = error
+            }
+            try? await Task.sleep(for: .milliseconds(200))
+        } while clock.now < deadline
+        if let lastError { throw lastError }
+        return try inventory()
+    }
+
+    func bringToFront(path: String) throws { try raise(path: path) }
+
+    func restore(_ saved: SavedPreviewDocument) async throws -> PreviewDocumentObservation {
+        try await DocumentRestorer().restore(SavedDocumentReference(saved), using: self)
+    }
+
+    func close(_ saved: SavedPreviewDocument) async throws -> Bool { try await close(path: saved.path) }
+
+    func close(path: String) async throws -> Bool {
+        guard AXIsProcessTrusted(), let (_, window) = matchingWindow(path: path) else { return false }
         var buttonValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &buttonValue) == .success,
               let button = buttonValue as! AXUIElement? else { return false }
@@ -79,23 +93,35 @@ final class PreviewAdapter {
         try? await Task.sleep(for: .milliseconds(750))
         // If an unsaved-change prompt or user cancellation keeps the document
         // present, report that it stayed open rather than bypassing the prompt.
-        return matchingWindow(path: saved.path, pid: app.processIdentifier) == nil
+        return matchingWindow(path: path) == nil
     }
 
     private func raise(path: String) throws {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).first,
-              let window = matchingWindow(path: path, pid: app.processIdentifier),
+        guard let (app, window) = matchingWindow(path: path),
               app.activate(options: [.activateAllWindows]),
               AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { throw AdapterError.verificationFailed(path) }
+    }
+    private func matchingWindow(path: String) -> (NSRunningApplication, AXUIElement)? {
+        let matches = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).compactMap { app -> (NSRunningApplication, AXUIElement)? in
+            guard !app.isTerminated, let window = matchingWindow(path: path, pid: app.processIdentifier) else { return nil }
+            return (app, window)
+        }
+        return matches.count == 1 ? matches[0] : nil
     }
     private func matchingWindow(path: String, pid: pid_t) -> AXUIElement? {
         let application = AXUIElementCreateApplication(pid); var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success, let windows = value as? [AXUIElement] else { return nil }
         let wanted = URL(fileURLWithPath: path).standardizedFileURL.path
-        let matches = windows.filter { stringAttribute(kAXDocumentAttribute, of: $0).flatMap(documentURL)?.standardizedFileURL.path == wanted }
+        let matches = windows.filter { attribute(kAXDocumentAttribute, of: $0).flatMap(documentURL)?.standardizedFileURL.path == wanted }
         return matches.count == 1 ? matches[0] : nil
     }
-    private func documentURL(_ value: String) -> URL? { value.hasPrefix("file:") ? URL(string: value) : value.hasPrefix("/") ? URL(fileURLWithPath: value) : nil }
+    private func documentURL(_ value: CFTypeRef) -> URL? {
+        if CFGetTypeID(value) == CFURLGetTypeID() { return value as? URL }
+        guard let string = value as? String else { return nil }
+        if string.hasPrefix("file:") { return URL(string: string) }
+        return string.hasPrefix("/") ? URL(fileURLWithPath: string) : nil
+    }
+    private func attribute(_ name: String, of element: AXUIElement) -> CFTypeRef? { var value: CFTypeRef?; return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil }
     private func stringAttribute(_ name: String, of element: AXUIElement) -> String? { var value: CFTypeRef?; return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value as? String : nil }
     private func boolAttribute(_ name: String, of element: AXUIElement) -> Bool? { var value: CFTypeRef?; return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value as? Bool : nil }
     private func windowFrame(_ window: AXUIElement) -> CGRect? {

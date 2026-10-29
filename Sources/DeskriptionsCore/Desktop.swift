@@ -64,6 +64,31 @@ public struct SavedPreviewDocument: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// An exact file identity together with the application that originally owned it.
+/// Discovery remains application-specific; persistence and explicit application
+/// opening use this common representation.
+public struct SavedDocumentReference: Codable, Equatable, Sendable, Identifiable {
+    public let id: UUID
+    public let applicationBundleID: String
+    public let applicationBundlePath: String?
+    public let path: String
+    public let displayName: String
+    public let identityMetadata: [String: String]
+
+    public init(id: UUID = UUID(), applicationBundleID: String, applicationBundlePath: String? = nil, path: String, displayName: String, identityMetadata: [String: String] = [:]) {
+        self.id = id
+        self.applicationBundleID = applicationBundleID
+        self.applicationBundlePath = applicationBundlePath
+        self.path = path
+        self.displayName = displayName
+        self.identityMetadata = identityMetadata
+    }
+
+    public init(_ legacy: SavedPreviewDocument, applicationBundlePath: String? = nil) {
+        self.init(id: legacy.id, applicationBundleID: legacy.applicationBundleID, applicationBundlePath: applicationBundlePath, path: legacy.path, displayName: legacy.displayName, identityMetadata: ["legacyType": "preview"])
+    }
+}
+
 public struct SavedNote: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
     public let noteIdentifier: String
@@ -131,17 +156,25 @@ public struct SavedDesktop: Codable, Equatable, Sendable, Identifiable {
     public let profiles: [BrowserProfileState]
     public let finderFolders: [SavedFinderFolder]
     public let previewDocuments: [SavedPreviewDocument]
+    public let documents: [SavedDocumentReference]
     public let notes: [SavedNote]
     public let applications: [SavedApplication]
     public let limitations: [String]
-    public init(formatVersion: Int = desktopFormatVersion, id: UUID = UUID(), name: String, createdAt: Date = Date(), modifiedAt: Date = Date(), profiles: [BrowserProfileState], finderFolders: [SavedFinderFolder] = [], previewDocuments: [SavedPreviewDocument] = [], notes: [SavedNote] = [], applications: [SavedApplication] = [], limitations: [String]) {
+    public init(formatVersion: Int = desktopFormatVersion, id: UUID = UUID(), name: String, createdAt: Date = Date(), modifiedAt: Date = Date(), profiles: [BrowserProfileState], finderFolders: [SavedFinderFolder] = [], previewDocuments: [SavedPreviewDocument] = [], documents: [SavedDocumentReference] = [], notes: [SavedNote] = [], applications: [SavedApplication] = [], limitations: [String]) {
         self.formatVersion = formatVersion; self.id = id; self.name = name; self.createdAt = createdAt
-        self.modifiedAt = modifiedAt; self.profiles = profiles; self.finderFolders = finderFolders; self.previewDocuments = previewDocuments; self.notes = notes; self.applications = applications; self.limitations = limitations
+        self.modifiedAt = modifiedAt; self.profiles = profiles; self.finderFolders = finderFolders; self.previewDocuments = previewDocuments; self.documents = documents; self.notes = notes; self.applications = applications; self.limitations = limitations
     }
     public var tabCount: Int { profiles.flatMap(\.windows).flatMap(\.tabs).count }
-    public var windowCount: Int { profiles.flatMap(\.windows).count + finderFolders.count + previewDocuments.count + notes.count }
+    public var documentReferences: [SavedDocumentReference] {
+        var result = documents
+        for legacy in previewDocuments where !result.contains(where: { $0.applicationBundleID == legacy.applicationBundleID && URL(fileURLWithPath: $0.path).standardizedFileURL.path == URL(fileURLWithPath: legacy.path).standardizedFileURL.path }) {
+            result.append(SavedDocumentReference(legacy))
+        }
+        return result
+    }
+    public var windowCount: Int { profiles.flatMap(\.windows).count + finderFolders.count + documentReferences.count + notes.count }
 
-    private enum CodingKeys: String, CodingKey { case formatVersion, id, name, createdAt, modifiedAt, profiles, finderFolders, previewDocuments, notes, applications, limitations }
+    private enum CodingKeys: String, CodingKey { case formatVersion, id, name, createdAt, modifiedAt, profiles, finderFolders, previewDocuments, documents, notes, applications, limitations }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         formatVersion = try values.decode(Int.self, forKey: .formatVersion)
@@ -152,6 +185,7 @@ public struct SavedDesktop: Codable, Equatable, Sendable, Identifiable {
         profiles = try values.decode([BrowserProfileState].self, forKey: .profiles)
         finderFolders = try values.decodeIfPresent([SavedFinderFolder].self, forKey: .finderFolders) ?? []
         previewDocuments = try values.decodeIfPresent([SavedPreviewDocument].self, forKey: .previewDocuments) ?? []
+        documents = try values.decodeIfPresent([SavedDocumentReference].self, forKey: .documents) ?? []
         notes = try values.decodeIfPresent([SavedNote].self, forKey: .notes) ?? []
         applications = try values.decodeIfPresent([SavedApplication].self, forKey: .applications) ?? []
         limitations = try values.decode([String].self, forKey: .limitations)
@@ -250,6 +284,21 @@ public struct DesktopNameCounter {
     }
 }
 
+public struct GenericInventoryPresentation: Equatable, Sendable {
+    public let title: String
+    public let windowTitles: [String]
+
+    public init(applicationName: String, identifiableWindowTitles: [String]) {
+        if identifiableWindowTitles.count == 1 {
+            title = "\(applicationName) — \(identifiableWindowTitles[0])"
+            windowTitles = []
+        } else {
+            title = applicationName
+            windowTitles = identifiableWindowTitles
+        }
+    }
+}
+
 public enum DesktopRetentionPolicy {
     public static func deletionIDs(desktops: [SavedDesktop], limit: Int, protecting protectedID: UUID? = nil) -> [UUID] {
         let limit = max(1, limit)
@@ -301,9 +350,10 @@ public struct DesktopContentNode: Equatable, Sendable {
 public enum DesktopPresentation {
     public static func summary(for desktop: SavedDesktop) -> DesktopContentSummary {
         let integrated = Set(desktop.profiles.map(\.applicationBundleID))
-        let generic = Set(desktop.applications.map(\.bundleIdentifier)).subtracting(integrated).subtracting(["com.apple.finder"])
+        let documentApplications = Set(desktop.documentReferences.map(\.applicationBundleID))
+        let generic = Set(desktop.applications.map(\.bundleIdentifier)).subtracting(integrated).subtracting(documentApplications).subtracting(["com.apple.finder"])
         return DesktopContentSummary(
-            applicationCount: integrated.count + generic.count + (desktop.finderFolders.isEmpty ? 0 : 1) + (desktop.previewDocuments.isEmpty ? 0 : 1) + (desktop.notes.isEmpty ? 0 : 1),
+            applicationCount: integrated.count + generic.count + documentApplications.count + (desktop.finderFolders.isEmpty ? 0 : 1) + (desktop.notes.isEmpty ? 0 : 1),
             browserTabCount: desktop.tabCount,
             folderCount: desktop.finderFolders.count
         )
@@ -330,8 +380,14 @@ public enum DesktopPresentation {
                 DesktopContentNode(kind: .folder, title: URL(fileURLWithPath: $0.path).lastPathComponent, subtitle: $0.path)
             }))
         }
-        if !desktop.previewDocuments.isEmpty {
-            nodes.append(DesktopContentNode(kind: .application, title: "Preview", subtitle: "Documents can be reopened precisely", bundleIdentifier: "com.apple.Preview", children: desktop.previewDocuments.map {
+        for (bundleID, documents) in Dictionary(grouping: desktop.documentReferences, by: \.applicationBundleID).sorted(by: { $0.key < $1.key }) {
+            let title: String
+            switch bundleID {
+            case "com.apple.Preview": title = "Preview"
+            case "com.microsoft.Powerpoint": title = "Microsoft PowerPoint"
+            default: title = bundleID
+            }
+            nodes.append(DesktopContentNode(kind: .application, title: title, subtitle: "Documents can be reopened precisely", bundleIdentifier: bundleID, children: documents.map {
                 DesktopContentNode(kind: .folder, title: $0.displayName, subtitle: $0.path)
             }))
         }
@@ -340,7 +396,7 @@ public enum DesktopPresentation {
                 DesktopContentNode(kind: .folder, title: $0.displayName, subtitle: "Saved Notes identifier: \($0.noteIdentifier.suffix(8))")
             }))
         }
-        let covered = Set(desktop.profiles.map(\.applicationBundleID)).union(["com.apple.finder", "com.apple.Preview", "com.apple.Notes"])
+        let covered = Set(desktop.profiles.map(\.applicationBundleID)).union(desktop.documentReferences.map(\.applicationBundleID)).union(["com.apple.finder", "com.apple.Notes"])
         nodes += ApplicationFallback.deduplicated(desktop.applications).filter { !covered.contains($0.bundleIdentifier) }.map {
             DesktopContentNode(kind: .application, title: $0.displayName, subtitle: "Application only · internal windows and documents are not captured", bundleIdentifier: $0.bundleIdentifier, children: [DesktopContentNode(kind: .limitation, title: "Opens the application only", subtitle: "Internal content cannot be restored precisely.")])
         }

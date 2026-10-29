@@ -1,5 +1,12 @@
 import AppKit
+import ApplicationServices
 import DeskriptionsCore
+
+struct GenericWindowObservation: Equatable {
+    let windowID: UInt32
+    let title: String?
+    let onScreen: Bool
+}
 
 struct GenericApplicationObservation: Equatable {
     let bundleIdentifier: String
@@ -7,6 +14,7 @@ struct GenericApplicationObservation: Equatable {
     let bundlePath: String?
     let processIdentifier: pid_t
     let hasOnScreenWindow: Bool
+    let windows: [GenericWindowObservation]
 }
 
 @MainActor
@@ -23,16 +31,71 @@ final class GenericApplicationAdapter {
                   !bundleID.hasPrefix("com.apple.WebKit."),
                   !bundleID.hasSuffix(".helper") else { return nil }
             let name = app.localizedName ?? windows.first?.ownerName ?? bundleID
+            let visibleWindows = windows.sorted { ($0.onScreen ? 0 : 1, $0.windowID) < ($1.onScreen ? 0 : 1, $1.windowID) }
+            let axTitles = accessibilityWindowTitles(pid: pid)
+            let observed = visibleWindows.map { window in
+                GenericWindowObservation(windowID: window.windowID,
+                                         title: meaningful(window.title) ?? axTitles[window.windowID],
+                                         onScreen: window.onScreen)
+            }
             return GenericApplicationObservation(bundleIdentifier: bundleID,
                                                  displayName: name,
                                                  bundlePath: app.bundleURL?.path,
                                                  processIdentifier: pid,
-                                                 hasOnScreenWindow: windows.contains(where: \.onScreen))
+                                                 hasOnScreenWindow: windows.contains(where: \.onScreen),
+                                                 windows: observed)
         }
         return Dictionary(grouping: observations, by: { $0.bundleIdentifier }).values.compactMap { entries in
             guard let first = entries.first else { return nil }
-            return GenericApplicationObservation(bundleIdentifier: first.bundleIdentifier, displayName: first.displayName, bundlePath: entries.compactMap(\.bundlePath).first, processIdentifier: first.processIdentifier, hasOnScreenWindow: entries.contains(where: \.hasOnScreenWindow))
+            let windows = entries.flatMap(\.windows).reduce(into: [GenericWindowObservation]()) { result, item in
+                if !result.contains(where: { $0.windowID == item.windowID }) { result.append(item) }
+            }.sorted { ($0.onScreen ? 0 : 1, $0.windowID) < ($1.onScreen ? 0 : 1, $1.windowID) }
+            return GenericApplicationObservation(bundleIdentifier: first.bundleIdentifier, displayName: first.displayName, bundlePath: entries.compactMap(\.bundlePath).first, processIdentifier: first.processIdentifier, hasOnScreenWindow: entries.contains(where: \.hasOnScreenWindow), windows: windows)
         }.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private func meaningful(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// CGWindow supplies stable window IDs and visibility. Accessibility is used
+    /// only as a title fallback when Window Server redacts a title. AX and CG
+    /// windows are correlated by their public position and size attributes.
+    private func accessibilityWindowTitles(pid: pid_t) -> [UInt32: String] {
+        guard AXIsProcessTrusted() else { return [:] }
+        let application = AXUIElementCreateApplication(pid)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return [:] }
+        let native = (CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []).compactMap { row -> (UInt32, CGRect)? in
+            guard (row[kCGWindowOwnerPID as String] as? Int32) == pid,
+                  let id = row[kCGWindowNumber as String] as? UInt32,
+                  let dictionary = row[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { return nil }
+            return (id, frame)
+        }
+        return windows.reduce(into: [:]) { result, element in
+            guard let frame = accessibilityFrame(element),
+                  let id = native.first(where: { approximatelyEqual($0.1, frame) })?.0 else { return }
+            var titleValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleValue) == .success,
+                  let title = titleValue as? String, let title = meaningful(title) else { return }
+            result[id] = title
+        }
+    }
+
+    private func accessibilityFrame(_ element: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?, size: CFTypeRef?, point = CGPoint.zero, dimensions = CGSize.zero
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID(),
+              AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions) else { return nil }
+        return CGRect(origin: point, size: dimensions)
+    }
+
+    private func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        abs(lhs.minX - rhs.minX) < 5 && abs(lhs.minY - rhs.minY) < 5 && abs(lhs.width - rhs.width) < 5 && abs(lhs.height - rhs.height) < 5
     }
 
     func restore(_ saved: SavedApplication) async -> Result<String, Error> {

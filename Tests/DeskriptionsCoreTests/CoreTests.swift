@@ -2,6 +2,16 @@ import XCTest
 @testable import DeskriptionsCore
 
 final class CoreTests: XCTestCase {
+    func testGenericInventoryPresentationCompactsSingleWindowAndGroupsMultipleWindows() {
+        XCTAssertEqual(GenericInventoryPresentation(applicationName: "Code", identifiableWindowTitles: ["deskription"]), .init(applicationName: "Code", identifiableWindowTitles: ["deskription"]))
+        XCTAssertEqual(GenericInventoryPresentation(applicationName: "Code", identifiableWindowTitles: ["deskription"]).title, "Code — deskription")
+        XCTAssertTrue(GenericInventoryPresentation(applicationName: "Code", identifiableWindowTitles: ["deskription"]).windowTitles.isEmpty)
+        let multiple = GenericInventoryPresentation(applicationName: "Code", identifiableWindowTitles: ["one", "two"])
+        XCTAssertEqual(multiple.title, "Code")
+        XCTAssertEqual(multiple.windowTitles, ["one", "two"])
+        XCTAssertEqual(GenericInventoryPresentation(applicationName: "Code", identifiableWindowTitles: []).title, "Code")
+    }
+
     func testAfterSavePolicyAndSafeDismissal() {
         XCTAssertEqual(AfterSavePolicy.decision(for: .keepOpen), .keepOpen)
         XCTAssertEqual(AfterSavePolicy.decision(for: .closeSupportedContent), .closeSupportedContent)
@@ -106,6 +116,23 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(ChromiumBrowser.displayName(for: brave.browser), "Brave Browser")
     }
 
+    func testAdapterReleaseVersionDoesNotDetermineProtocolCompatibility() {
+        let capabilities = ["inventory.windows", "inventory.tabs", "inventory.fresh"]
+        let olderRelease = ExtensionHello(installationID: "older", sessionID: "session", browser: ChromiumBrowser.brave.rawValue, capabilities: capabilities, windows: [], adapterVersion: "1.0.0")
+        let newerRelease = ExtensionHello(installationID: "newer", sessionID: "session", browser: ChromiumBrowser.edge.rawValue, capabilities: capabilities, windows: [], adapterVersion: "99.4.2")
+        XCTAssertTrue(AdapterCompatibility.evaluate(olderRelease).isCompatible)
+        XCTAssertTrue(AdapterCompatibility.evaluate(newerRelease).isCompatible)
+    }
+
+    func testAdapterRejectsGenuineProtocolAndCapabilityIncompatibility() {
+        let wrongProtocol = ExtensionHello(protocolVersion: 2, installationID: "future", sessionID: "session", browser: ChromiumBrowser.chrome.rawValue, capabilities: Array(requiredAdapterCapabilities), windows: [], adapterVersion: "1.0.3")
+        let missingTabs = ExtensionHello(installationID: "limited", sessionID: "session", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "1.0.3")
+        XCTAssertFalse(AdapterCompatibility.evaluate(wrongProtocol).isCompatible)
+        XCTAssertTrue(AdapterCompatibility.evaluate(wrongProtocol).explanation.contains("protocol"))
+        XCTAssertFalse(AdapterCompatibility.evaluate(missingTabs).isCompatible)
+        XCTAssertTrue(AdapterCompatibility.evaluate(missingTabs).explanation.contains("inventory.tabs"))
+    }
+
     func testLegacyBrowserProfileRequiresVerifiedReassociation() throws {
         let json = """
         {"applicationBundleID":"com.google.Chrome","installationID":"legacy","adapterStateVersion":1,"launchProfileDirectory":"Default","windows":[]}
@@ -168,6 +195,30 @@ final class CoreTests: XCTestCase {
         let decoded = try JSONDecoder().decode(SavedPreviewDocument.self, from: data)
         XCTAssertEqual(decoded.applicationBundleID, "com.apple.Preview")
         XCTAssertEqual(try JSONDecoder().decode(SavedPreviewDocument.self, from: JSONEncoder().encode(decoded)), decoded)
+    }
+    func testGenericDocumentReferenceRoundTripPreservesOriginalApplication() throws {
+        let store = temporaryStore()
+        let document = SavedDocumentReference(applicationBundleID: "com.microsoft.Powerpoint", applicationBundlePath: "/Applications/Microsoft PowerPoint.app", path: "/tmp/disposable-presentation.pptx", displayName: "disposable-presentation.pptx", identityMetadata: ["discovery": "PowerPointAutomationFullName"])
+        let desktop = SavedDesktop(name: "PowerPoint", profiles: [], documents: [document], limitations: [])
+        try store.save(desktop)
+        let loaded = try store.load(desktop.id)
+        XCTAssertEqual(loaded.documents, [document])
+        XCTAssertEqual(loaded.documentReferences, [document])
+        XCTAssertEqual(loaded.windowCount, 1)
+        XCTAssertEqual(DesktopPresentation.hierarchy(for: loaded, browserName: { $0 }).first?.title, "Microsoft PowerPoint")
+    }
+    func testLegacyDesktopWithoutGenericDocumentsStillDecodes() throws {
+        let store = temporaryStore()
+        let desktop = SavedDesktop(name: "Legacy", profiles: [], previewDocuments: [SavedPreviewDocument(path: "/tmp/legacy.pdf", displayName: "legacy.pdf")], limitations: [])
+        try store.save(desktop)
+        let url = store.url(for: desktop.id)
+        var object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        object.removeValue(forKey: "documents")
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        let loaded = try store.load(desktop.id)
+        XCTAssertTrue(loaded.documents.isEmpty)
+        XCTAssertEqual(loaded.documentReferences.first?.applicationBundleID, "com.apple.Preview")
+        XCTAssertEqual(loaded.documentReferences.first?.path, "/tmp/legacy.pdf")
     }
     private func temporaryStore() -> DesktopStore {
         DesktopStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-tests-\(UUID().uuidString)"))
@@ -285,8 +336,8 @@ final class CoreTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-bridge-dedup-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
-        let old = ExtensionHello(installationID: "race-old", sessionID: "same-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "0.4.1")
-        let current = ExtensionHello(installationID: "stable", sessionID: "same-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "0.4.2")
+        let old = ExtensionHello(installationID: "race-old", sessionID: "same-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "0.4.1")
+        let current = ExtensionHello(installationID: "stable", sessionID: "same-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "0.4.2")
         let oldURL = root.appendingPathComponent("profile-race-old.json"), currentURL = root.appendingPathComponent("profile-stable.json")
         try encoder.encode(old).write(to: oldURL); try encoder.encode(current).write(to: currentURL)
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-1)], ofItemAtPath: oldURL.path)
@@ -297,7 +348,7 @@ final class CoreTests: XCTestCase {
     func testBridgeRejectsBrowserIdentityBasedOnlyOnManifestAlias() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-bridge-browser-proof-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let unverified = ExtensionHello(installationID: "same", sessionID: "session", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "0.8.0", browserIdentitySource: "native-host-registration-v1")
+        let unverified = ExtensionHello(installationID: "same", sessionID: "session", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "0.8.0", browserIdentitySource: "native-host-registration-v1")
         try JSONEncoder().encode(unverified).write(to: root.appendingPathComponent("profile-unverified.json"))
         let profiles = await FileAdapterBridge(root: root).connectedProfiles()
         XCTAssertTrue(profiles.isEmpty)
@@ -307,8 +358,8 @@ final class CoreTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-bridge-registrations-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let now = Date()
-        let stale = ExtensionHello(installationID: "stale", sessionID: "old", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "1.0.2")
-        let incompatible = ExtensionHello(protocolVersion: 99, installationID: "future", sessionID: "new", browser: ChromiumBrowser.edge.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "9.0")
+        let stale = ExtensionHello(installationID: "stale", sessionID: "old", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "1.0.2")
+        let incompatible = ExtensionHello(protocolVersion: 99, installationID: "future", sessionID: "new", browser: ChromiumBrowser.edge.rawValue, capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "9.0")
         let staleURL = root.appendingPathComponent("profile-stale.json"), incompatibleURL = root.appendingPathComponent("profile-future.json")
         try JSONEncoder().encode(stale).write(to: staleURL); try JSONEncoder().encode(incompatible).write(to: incompatibleURL)
         try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-120)], ofItemAtPath: staleURL.path)
@@ -323,7 +374,7 @@ final class CoreTests: XCTestCase {
     func testTimedOutCommandCannotRunAfterReconnect() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-bridge-timeout-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let hello = ExtensionHello(installationID: "stale-profile", sessionID: "dead-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "0.5.0")
+        let hello = ExtensionHello(installationID: "stale-profile", sessionID: "dead-session", browser: "com.google.Chrome", capabilities: ["inventory.windows", "inventory.tabs", "inventory.fresh"], windows: [], adapterVersion: "0.5.0")
         try JSONEncoder().encode(hello).write(to: root.appendingPathComponent("profile-stale-profile.json"))
         let bridge = FileAdapterBridge(root: root)
         do {

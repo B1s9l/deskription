@@ -24,7 +24,7 @@ function exchange(message) {
 }
 
 (async () => {
-  const base = {type:"inventory", savedStateVersion:1, adapterVersion:"test", installationID:"automated-test", sessionID:"session", browser:"com.google.Chrome", capabilities:["inventory.windows","inventory.fresh"], windows:[]};
+  const base = {type:"inventory", savedStateVersion:1, adapterVersion:"test", installationID:"automated-test", sessionID:"session", browser:"com.google.Chrome", capabilities:["inventory.windows","inventory.tabs","inventory.fresh"], windows:[]};
   const current = await exchange({...base, protocolVersion:1});
   // A direct test process has no verified Chromium parent. Production must reject
   // the extension-supplied browser label rather than treating it as authoritative.

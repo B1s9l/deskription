@@ -13,4 +13,15 @@ API v1 remains provisional. Patch releases may add optional fields and capabilit
 
 Updating the app does not alter `~/Library/Application Support/Deskriptions/`. Reinstalling the bridge atomically replaces the one user-level native-host manifest. Updating the unpacked extension in place retains its `chrome.storage.local` installation identity; removing and loading it as a new extension can create a new identity and requires profile association again.
 
+## Signing and local updates
+
+macOS privacy grants are associated with an application's code identity, not only its bundle identifier or Team ID. The notarized public app is signed with **Developer ID Application** for team `9ZGCDZ7YNN`. An Apple Development or ad-hoc build has a different designated requirement, so installing it over the public app can cause Accessibility, Automation, and Screen Recording to request approval again.
+
+- `scripts/build-app.sh` and the default `scripts/build-release.sh` create quick Apple Development-signed test builds. Run them from `.build`; do not install them over the trusted public app.
+- `scripts/build-distribution.sh` creates a Developer ID-signed, timestamped package without contacting Apple's notarization service. This is the correct local update identity when permission continuity must be tested.
+- `scripts/install-trusted-update.sh` refuses ad-hoc or Apple Development candidates, verifies the bundle ID, Team ID, Hardened Runtime, embedded signatures, and exact designated-requirement match, then preserves the prior `/Applications` app as a versioned backup.
+- `scripts/notarize-release.sh` is the explicit public-distribution workflow. It builds with Developer ID, submits using the Keychain notary profile, waits for acceptance, staples, validates, and runs Gatekeeper assessment. It must not be used for ordinary development builds.
+
+Signing continuity improves permission stability but cannot guarantee it: moving between different designated requirements, changing entitlements, TCC policy changes, or installing/running a different copy of the app can still require approval. Always grant permissions to the exact `/Applications/Deskriptions.app` copy intended for regular use.
+
 There is no saved-data migration in 1.0.0 because format v1 remains the only supported format. Format-v1 records created before Finder, Preview, Notes, and application-only fields were introduced decode those fields as empty. A future format migration must write a new record, retain the recoverable original, validate the result, and only then offer cleanup.

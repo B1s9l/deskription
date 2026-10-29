@@ -59,7 +59,7 @@ final class SetupController: NSObject {
             Extension version:     \(extensionVersions.isEmpty ? "not checked — no compatible live connection" : extensionVersions)
             Adapter protocol:      app v\(protocolVersion); incompatible observations: \(issues.incompatible)
 
-            Capture permission is required only for live previews. Status above includes a real ScreenCaptureKit screenshot probe, not only the settings toggle. Accessibility is optional and used only when Preview exposes exact document URLs. Finder and Notes request application-specific Automation access on first use and report denial without saving or closing anything. Apple documents that a relaunch can be required after first granting capture access.
+            Capture permission is required only for live previews. Status above includes a real ScreenCaptureKit screenshot probe, not only the settings toggle. Accessibility is optional and used only when Preview exposes exact document URLs. Finder, Notes, and Microsoft PowerPoint request application-specific Automation access on first use and report denial without saving or closing anything. PowerPoint Automation is used only to obtain and verify saved presentation file identities. Apple documents that a relaunch can be required after first granting capture access.
             """
             self.statusLabel?.stringValue = text
         }

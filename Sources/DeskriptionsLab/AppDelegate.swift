@@ -77,6 +77,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SCStre
         displayObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in Task { @MainActor in self?.schedulePreviewRecovery(reason: "display configuration changed", immediate: true) } }
         if let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != ProcessInfo.processInfo.processIdentifier { lastExternalPID = front.processIdentifier }
         rebuildMenu()
+        if let option = CommandLine.arguments.firstIndex(of: "--preview-document-check"), CommandLine.arguments.indices.contains(option + 1) {
+            let path = CommandLine.arguments[option + 1]
+            Task { @MainActor in
+                let adapter = PreviewAdapter()
+                let saved = SavedPreviewDocument(path: path, displayName: URL(fileURLWithPath: path).lastPathComponent)
+                do {
+                    _ = try await adapter.restore(saved)
+                    let closed = try await adapter.close(saved)
+                    print("Preview disposable document restore: \(closed ? "opened, verified, and closed exactly" : "opened and verified; exact close was not confirmed")")
+                } catch {
+                    print("Preview disposable document restore failed: \(error.localizedDescription)")
+                }
+                NSApp.terminate(nil)
+            }
+        }
+        if CommandLine.arguments.contains("--preview-inventory-check") {
+            Task { @MainActor in
+                do {
+                    let documents = try await PreviewAdapter().inventoryWithRetry()
+                    print("Preview inventory: \(documents.count) exact document(s)")
+                    for document in documents { print("- \(document.displayName) | \(document.onScreen ? "on screen" : "not on screen")") }
+                } catch { print("Preview inventory failed: \(error.localizedDescription)") }
+                NSApp.terminate(nil)
+            }
+        }
+        if CommandLine.arguments.contains("--powerpoint-inventory-check") {
+            Task { @MainActor in
+                do {
+                    let adapter = PowerPointAdapter()
+                    let documents = try await adapter.inventoryWithRetry()
+                    print("PowerPoint inventory: \(documents.count) exact presentation(s); unidentified: \(adapter.hasUnidentifiedPresentations)")
+                    for document in documents { print("- \(document.displayName) | \(document.onScreen ? "on screen" : "not on screen")") }
+                } catch { print("PowerPoint inventory failed: \(error.localizedDescription)") }
+                NSApp.terminate(nil)
+            }
+        }
+        if let option = CommandLine.arguments.firstIndex(of: "--powerpoint-document-check"), CommandLine.arguments.indices.contains(option + 1) {
+            let path = CommandLine.arguments[option + 1]
+            Task { @MainActor in
+                let adapter = PowerPointAdapter()
+                let applicationPath = NSWorkspace.shared.urlForApplication(withBundleIdentifier: PowerPointAdapter.bundleIdentifier)?.path
+                let saved = SavedDocumentReference(applicationBundleID: PowerPointAdapter.bundleIdentifier, applicationBundlePath: applicationPath, path: path, displayName: URL(fileURLWithPath: path).lastPathComponent)
+                do {
+                    _ = try await DocumentRestorer().restore(saved, using: adapter)
+                    print("PowerPoint disposable presentation restore: opened or reused and verified exactly")
+                } catch { print("PowerPoint disposable presentation restore failed: \(error.localizedDescription)") }
+                NSApp.terminate(nil)
+            }
+        }
         if CommandLine.arguments.contains("--pin-focused") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.pinFocused() }
         }

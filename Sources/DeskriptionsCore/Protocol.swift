@@ -1,6 +1,7 @@
 import Foundation
 
 public let protocolVersion = 1
+public let requiredAdapterCapabilities: Set<String> = ["inventory.windows", "inventory.tabs", "inventory.fresh"]
 
 public struct Rect: Codable, Equatable, Sendable {
     public var x, y, width, height: Double
@@ -57,6 +58,29 @@ public extension ExtensionHello {
     /// Browser-scoped connection identity. Extension storage identifiers are not
     /// assumed to be globally unique across Chromium products.
     var identityKey: String { "\(browser)|\(installationID)" }
+}
+
+public struct AdapterCompatibility: Equatable, Sendable {
+    public let isCompatible: Bool
+    public let explanation: String
+
+    public static func evaluate(_ hello: ExtensionHello) -> AdapterCompatibility {
+        guard hello.protocolVersion == protocolVersion else {
+            return .init(isCompatible: false, explanation: "protocol v\(hello.protocolVersion) is incompatible; app requires v\(protocolVersion)")
+        }
+        guard hello.browserIdentitySource == "native-parent-process-v1" else {
+            return .init(isCompatible: false, explanation: "browser identity was not verified by the native host")
+        }
+        guard ChromiumBrowser(rawValue: hello.browser) != nil else {
+            return .init(isCompatible: false, explanation: "browser is not supported")
+        }
+        let missing = requiredAdapterCapabilities.subtracting(hello.capabilities).sorted()
+        guard missing.isEmpty else {
+            return .init(isCompatible: false, explanation: "missing required capabilities: \(missing.joined(separator: ", "))")
+        }
+        let release = hello.adapterVersion.map { "adapter release v\($0)" } ?? "adapter release unknown"
+        return .init(isCompatible: true, explanation: "protocol v\(protocolVersion) compatible · \(release)")
+    }
 }
 
 public enum ChromiumBrowser: String, CaseIterable, Codable, Sendable {

@@ -83,11 +83,7 @@ public actor FileAdapterBridge {
             guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
                   let modified = values.contentModificationDate, Date().timeIntervalSince(modified) <= maxAge,
                   let data = try? Data(contentsOf: url), let hello = try? decoder.decode(ExtensionHello.self, from: data),
-                  hello.protocolVersion == protocolVersion,
-                  hello.browserIdentitySource == "native-parent-process-v1",
-                  ChromiumBrowser(rawValue: hello.browser) != nil,
-                  hello.adapterVersion != nil,
-                  hello.capabilities.contains("inventory.windows"), hello.capabilities.contains("inventory.fresh") else { return nil }
+                  AdapterCompatibility.evaluate(hello).isCompatible else { return nil }
             return (hello, modified)
         }
         // A service-worker startup race in early builds could write two installation
@@ -117,14 +113,7 @@ public actor FileAdapterBridge {
             guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { continue }
             let data = try? Data(contentsOf: url)
             let hello = data.flatMap { try? decoder.decode(ExtensionHello.self, from: $0) }
-            let compatible = hello.map {
-                $0.protocolVersion == protocolVersion &&
-                $0.browserIdentitySource == "native-parent-process-v1" &&
-                ChromiumBrowser(rawValue: $0.browser) != nil &&
-                $0.adapterVersion != nil &&
-                $0.capabilities.contains("inventory.windows") &&
-                $0.capabilities.contains("inventory.fresh")
-            } ?? false
+            let compatible = hello.map { AdapterCompatibility.evaluate($0).isCompatible } ?? false
             let compatibility: ExtensionRegistration.Compatibility = hello == nil ? .malformed : compatible ? .compatible : .incompatible
             let connected = compatible && now.timeIntervalSince(modified) >= 0 && now.timeIntervalSince(modified) <= maxAge
             let browser = hello?.browser
