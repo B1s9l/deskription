@@ -48,9 +48,20 @@ public struct SavedFinderFolder: Codable, Equatable, Sendable, Identifiable {
 
 public struct SavedPreviewDocument: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
+    public let applicationBundleID: String
     public let path: String
     public let displayName: String
-    public init(id: UUID = UUID(), path: String, displayName: String) { self.id = id; self.path = path; self.displayName = displayName }
+    public init(id: UUID = UUID(), applicationBundleID: String = "com.apple.Preview", path: String, displayName: String) {
+        self.id = id; self.applicationBundleID = applicationBundleID; self.path = path; self.displayName = displayName
+    }
+    private enum CodingKeys: String, CodingKey { case id, applicationBundleID, path, displayName }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        applicationBundleID = try values.decodeIfPresent(String.self, forKey: .applicationBundleID) ?? "com.apple.Preview"
+        path = try values.decode(String.self, forKey: .path)
+        displayName = try values.decode(String.self, forKey: .displayName)
+    }
 }
 
 public struct SavedNote: Codable, Equatable, Sendable, Identifiable {

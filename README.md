@@ -45,7 +45,7 @@ For development:
 
 ```sh
 ./scripts/build-app.sh
-open '.build/Deskriptions-1.0.1-build38.app'
+open '.build/Deskriptions-1.0.2-build39.app'
 ```
 
 ### Developer ID distribution and notarization

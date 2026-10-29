@@ -163,6 +163,12 @@ final class CoreTests: XCTestCase {
         let legacy = try store.load(desktop.id)
         XCTAssertTrue(legacy.previewDocuments.isEmpty); XCTAssertTrue(legacy.notes.isEmpty)
     }
+    func testLegacyPreviewRecordPreservesPreviewApplicationIdentity() throws {
+        let data = Data(#"{"id":"00000000-0000-0000-0000-000000000001","path":"/tmp/legacy.pdf","displayName":"legacy.pdf"}"#.utf8)
+        let decoded = try JSONDecoder().decode(SavedPreviewDocument.self, from: data)
+        XCTAssertEqual(decoded.applicationBundleID, "com.apple.Preview")
+        XCTAssertEqual(try JSONDecoder().decode(SavedPreviewDocument.self, from: JSONEncoder().encode(decoded)), decoded)
+    }
     private func temporaryStore() -> DesktopStore {
         DesktopStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-tests-\(UUID().uuidString)"))
     }
@@ -295,6 +301,23 @@ final class CoreTests: XCTestCase {
         try JSONEncoder().encode(unverified).write(to: root.appendingPathComponent("profile-unverified.json"))
         let profiles = await FileAdapterBridge(root: root).connectedProfiles()
         XCTAssertTrue(profiles.isEmpty)
+    }
+
+    func testExtensionRegistrationInventoryKeepsStaleAndIncompatibleEntriesDisconnected() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("deskriptions-bridge-registrations-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let now = Date()
+        let stale = ExtensionHello(installationID: "stale", sessionID: "old", browser: ChromiumBrowser.chrome.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "1.0.2")
+        let incompatible = ExtensionHello(protocolVersion: 99, installationID: "future", sessionID: "new", browser: ChromiumBrowser.edge.rawValue, capabilities: ["inventory.windows", "inventory.fresh"], windows: [], adapterVersion: "9.0")
+        let staleURL = root.appendingPathComponent("profile-stale.json"), incompatibleURL = root.appendingPathComponent("profile-future.json")
+        try JSONEncoder().encode(stale).write(to: staleURL); try JSONEncoder().encode(incompatible).write(to: incompatibleURL)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-120)], ofItemAtPath: staleURL.path)
+        let registrations = await FileAdapterBridge(root: root).extensionRegistrations(maxAge: 65, now: now)
+        XCTAssertEqual(registrations.count, 2)
+        XCTAssertEqual(registrations.first { $0.installationID == "stale" }?.compatibility, .compatible)
+        XCTAssertEqual(registrations.first { $0.installationID == "stale" }?.isConnected, false)
+        XCTAssertEqual(registrations.first { $0.installationID == "future" }?.compatibility, .incompatible)
+        XCTAssertEqual(registrations.first { $0.installationID == "future" }?.isConnected, false)
     }
 
     func testTimedOutCommandCannotRunAfterReconnect() async throws {

@@ -187,7 +187,10 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
             do { freshNotes = selectedNoteIDs.isEmpty ? [] : try notesAdapter.inventory() }
             catch { show("Desktop wasn’t saved", error.localizedDescription); return }
             guard selectedNoteIDs.isSubset(of: Set(freshNotes.map(\.identifier))) else { show("Inventory changed", "A selected note changed or disappeared. Review the inventory and save again; nothing was closed."); return }
-            let freshGeneric = genericAdapter.inventory(nativeWindows: allNativeWindows(), ownBundleID: Bundle.main.bundleIdentifier, integratedBrowserBundleIDs: Set(fresh.map(\.browser)))
+            var dedicated = Set(fresh.map(\.browser))
+            if !freshPreview.isEmpty { dedicated.insert(PreviewAdapter.bundleIdentifier) }
+            if !freshNotes.isEmpty { dedicated.insert(NotesAdapter.bundleIdentifier) }
+            let freshGeneric = genericAdapter.inventory(nativeWindows: allNativeWindows(), ownBundleID: Bundle.main.bundleIdentifier, integratedBrowserBundleIDs: dedicated)
             guard selectedGenericBundleIDs.isSubset(of: Set(freshGeneric.map(\.bundleIdentifier))) else {
                 show("Inventory changed", "A selected application closed or became unavailable. Review the inventory and save again; nothing was closed."); return
             }

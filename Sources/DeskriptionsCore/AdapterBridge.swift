@@ -57,6 +57,20 @@ public struct AdapterResponse: Codable, Sendable {
     public let payload: JSONValue?
 }
 
+public struct ExtensionRegistration: Equatable, Sendable {
+    public enum Compatibility: String, Equatable, Sendable { case compatible, incompatible, malformed }
+    public let hello: ExtensionHello?
+    public let browserBundleID: String?
+    public let installationID: String?
+    public let lastSeen: Date
+    public let isConnected: Bool
+    public let compatibility: Compatibility
+    public init(hello: ExtensionHello?, browserBundleID: String?, installationID: String?, lastSeen: Date, isConnected: Bool, compatibility: Compatibility) {
+        self.hello = hello; self.browserBundleID = browserBundleID; self.installationID = installationID
+        self.lastSeen = lastSeen; self.isConnected = isConnected; self.compatibility = compatibility
+    }
+}
+
 public actor FileAdapterBridge {
     public let root: URL
     private let encoder = JSONEncoder()
@@ -89,6 +103,41 @@ public actor FileAdapterBridge {
             newestByInstallation[candidate.0.identityKey] = candidate
         }
         return newestByInstallation.values.sorted { $0.1 > $1.1 }.map(\.0)
+    }
+
+    /// Returns the newest durable observation for every browser-scoped extension
+    /// installation, including stale and incompatible registrations. Operational
+    /// callers should continue to use `connectedProfiles`; this inventory exists
+    /// so diagnostics and Settings do not mistake historical handshakes for live
+    /// connections or hide registrations merely because they need attention.
+    public func extensionRegistrations(maxAge: TimeInterval = 65, now: Date = Date()) -> [ExtensionRegistration] {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        var newest: [String: ExtensionRegistration] = [:]
+        for url in files where url.lastPathComponent.hasPrefix("profile-") && url.pathExtension == "json" {
+            guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { continue }
+            let data = try? Data(contentsOf: url)
+            let hello = data.flatMap { try? decoder.decode(ExtensionHello.self, from: $0) }
+            let compatible = hello.map {
+                $0.protocolVersion == protocolVersion &&
+                $0.browserIdentitySource == "native-parent-process-v1" &&
+                ChromiumBrowser(rawValue: $0.browser) != nil &&
+                $0.adapterVersion != nil &&
+                $0.capabilities.contains("inventory.windows") &&
+                $0.capabilities.contains("inventory.fresh")
+            } ?? false
+            let compatibility: ExtensionRegistration.Compatibility = hello == nil ? .malformed : compatible ? .compatible : .incompatible
+            let connected = compatible && now.timeIntervalSince(modified) >= 0 && now.timeIntervalSince(modified) <= maxAge
+            let browser = hello?.browser
+            let installation = hello?.installationID
+            // Malformed files have no trustworthy identity, so retain each one.
+            let key = hello.map(\.identityKey) ?? "malformed|\(url.lastPathComponent)"
+            let registration = ExtensionRegistration(hello: hello, browserBundleID: browser, installationID: installation, lastSeen: modified, isConnected: connected, compatibility: compatibility)
+            if (newest[key]?.lastSeen ?? .distantPast) < modified { newest[key] = registration }
+        }
+        return newest.values.sorted {
+            if $0.lastSeen != $1.lastSeen { return $0.lastSeen > $1.lastSeen }
+            return ($0.browserBundleID ?? "") < ($1.browserBundleID ?? "")
+        }
     }
 
     public func connectionIssueCounts(maxAge: TimeInterval = 65) -> (incompatible: Int, malformed: Int) {

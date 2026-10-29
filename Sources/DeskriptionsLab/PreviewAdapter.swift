@@ -12,10 +12,11 @@ struct PreviewDocumentObservation: Equatable {
 final class PreviewAdapter {
     static let bundleIdentifier = "com.apple.Preview"
     enum AdapterError: LocalizedError {
-        case accessibilityRequired, unavailable(String), verificationFailed(String), automation(String)
+        case accessibilityRequired, identityUnavailable, unavailable(String), verificationFailed(String), automation(String)
         var errorDescription: String? {
             switch self {
             case .accessibilityRequired: return "Preview document identification requires Accessibility access. Enable Deskriptions in Privacy & Security → Accessibility, then reopen Save Desktop."
+            case .identityUnavailable: return "Preview is open, but it did not expose an exact AXDocument file URL. Deskriptions will offer Preview as application-only; document contents cannot be restored precisely."
             case .unavailable(let path): return "The saved Preview document is unavailable: \(path)"
             case .verificationFailed(let path): return "Preview did not expose a verified window for: \(path)"
             case .automation(let message): return "Preview integration failed: \(message)"
@@ -34,18 +35,24 @@ final class PreviewAdapter {
         let observations: [PreviewDocumentObservation] = windows.compactMap { window -> PreviewDocumentObservation? in
             guard let document = stringAttribute(kAXDocumentAttribute, of: window), let url = documentURL(document), url.isFileURL else { return nil }
             var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else { return nil }
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
+                  FileManager.default.isReadableFile(atPath: url.path) else { return nil }
             let minimized = boolAttribute(kAXMinimizedAttribute, of: window) ?? false
             let frame = windowFrame(window)
             let onScreen = !app.isHidden && !minimized && frame.map { candidate in native.contains { approximatelyEqual($0, candidate) && $0.onScreen } } == true
             return PreviewDocumentObservation(path: url.standardizedFileURL.path, displayName: url.lastPathComponent, onScreen: onScreen)
         }
-        return observations.reduce(into: [PreviewDocumentObservation]()) { values, item in if !values.contains(where: { $0.path == item.path }) { values.append(item) } }
+        let unique = observations.reduce(into: [PreviewDocumentObservation]()) { values, item in if !values.contains(where: { $0.path == item.path }) { values.append(item) } }
+        if !windows.isEmpty && unique.isEmpty { throw AdapterError.identityUnavailable }
+        return unique
     }
 
     func restore(_ saved: SavedPreviewDocument) async throws -> PreviewDocumentObservation {
+        guard saved.applicationBundleID == Self.bundleIdentifier else { throw AdapterError.unavailable("unsupported application identity \(saved.applicationBundleID)") }
         let url = URL(fileURLWithPath: saved.path).standardizedFileURL
-        guard FileManager.default.fileExists(atPath: url.path) else { throw AdapterError.unavailable(saved.path) }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue,
+              FileManager.default.isReadableFile(atPath: url.path) else { throw AdapterError.unavailable(saved.path) }
         if let existing = try inventory().first(where: { $0.path == url.path }) { try raise(path: url.path); return existing }
         guard let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleIdentifier) else { throw AdapterError.unavailable("Preview.app") }
         let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = true

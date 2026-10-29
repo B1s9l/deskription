@@ -21,13 +21,15 @@ final class SettingsController: NSObject, NSWindowDelegate {
         let chooseWindow: () -> Void, nativeInventory: () -> Void, exportDiagnostics: () -> Void, recentStatus: () -> Void
     }
     private let bridge = FileAdapterBridge()
-    private let bridgeRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("deskriptions-lab", isDirectory: true)
     private let shortcuts: ShortcutManager
     private let actions: Actions
     private var window: NSWindow?
     private var tabs: NSTabView!
     private var shortcutLabels: [ShortcutManager.Action: NSTextField] = [:]
     private var extensionStack: NSStackView?
+    private weak var extensionDocumentView: NSView?
+    private var extensionRefreshTask: Task<Void, Never>?
+    private var extensionRefreshGeneration = 0
     private var diagnosticsLabel: NSTextField?
     private var loginStatus: NSTextField?
     private var savedDesktopCountLabel: NSTextField?
@@ -209,7 +211,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
         let v = page(); heading("Extensions", y: 445, in: v)
         let intro = NSTextField(wrappingLabelWithString: "Deskriptions is open source. Developers can build additional extensions. Official extensions are available from the project’s GitHub repository. Currently, browser extensions are installed using developer mode and are not available through extension stores."); intro.frame = NSRect(x: 24, y: 365, width: 650, height: 70); v.addSubview(intro)
         let github = NSButton(title: "Open Project on GitHub", target: self, action: #selector(openProject)); github.frame = NSRect(x: 24, y: 325, width: 180, height: 32); v.addSubview(github)
-        let scroll = NSScrollView(frame: NSRect(x: 24, y: 20, width: 660, height: 295)); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
+        let scroll = NSScrollView(frame: NSRect(x: 24, y: 20, width: 660, height: 295)); scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.borderType = .bezelBorder; scroll.autoresizingMask = [.width, .height]
         let document = FlippedView(frame: NSRect(x: 0, y: 0, width: 640, height: 295))
         let stack = NSStackView(); stack.translatesAutoresizingMaskIntoConstraints = false; stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
         document.addSubview(stack); scroll.documentView = document
@@ -217,60 +219,77 @@ final class SettingsController: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 8),
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 8),
             stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -8),
-            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -8),
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor)
         ])
-        v.addSubview(scroll); extensionStack = stack
+        v.addSubview(scroll); extensionStack = stack; extensionDocumentView = document
         return v
     }
-    private func refreshExtensions() { Task { let profiles = await bridge.connectedProfiles(maxAge: 65); await MainActor.run { self.renderExtensions(profiles) } } }
-    private func renderExtensions(_ profiles: [ExtensionHello]) {
+    private func refreshExtensions() {
+        extensionRefreshGeneration += 1
+        let generation = extensionRefreshGeneration
+        extensionRefreshTask?.cancel()
+        extensionRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            let registrations = await bridge.extensionRegistrations(maxAge: 65)
+            guard !Task.isCancelled, generation == extensionRefreshGeneration else { return }
+            renderExtensions(registrations)
+        }
+    }
+    private func renderExtensions(_ registrations: [ExtensionRegistration]) {
         guard let stack = extensionStack else { return }; stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let savedProfiles = desktopStore?.list().desktops.flatMap(\.profiles) ?? []
+        let configuredIdentities = Set(ProfileConfigurationStore.all().keys)
         for browser in ChromiumBrowser.allCases {
-            let matches = profiles.filter { $0.browser == browser.rawValue }
-            if matches.isEmpty {
-                let prior = lastHandshake(browser: browser.rawValue).map { "Last connected \(handshakeFormatter.string(from: $0))" } ?? "Never connected"
-                let row = extensionRow(title: browser.displayName + " browser extension", detail: "● Disconnected — \(prior)", green: false, bundleID: browser.rawValue); row.heightAnchor.constraint(equalToConstant: 48).isActive = true; stack.addArrangedSubview(row)
+            let observed = registrations.filter { $0.browserBundleID == browser.rawValue }
+            let historicalIDs = Set(savedProfiles.filter { $0.applicationBundleID == browser.rawValue }.map(\.installationID))
+                .union(configuredIdentities.compactMap { key in key.hasPrefix(browser.rawValue + "|") ? String(key.dropFirst(browser.rawValue.count + 1)) : nil })
+            let observedIDs = Set(observed.compactMap(\.installationID))
+            let unobserved = historicalIDs.subtracting(observedIDs).sorted()
+            if observed.isEmpty && unobserved.isEmpty {
+                let installed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.rawValue) != nil
+                let detail = installed ? "● Disconnected · supported extension not currently registered" : "● Unavailable · browser is not installed"
+                stack.addArrangedSubview(extensionRow(title: browser.displayName + " extension", detail: detail, green: false, bundleID: browser.rawValue, metadata: "External extension · protocol v\(protocolVersion) · window/tab inventory and restore"))
             }
-            for profile in matches {
-                let handshake = lastHandshake(for: profile).map(handshakeFormatter.string(from:)) ?? "just now"
+            for registration in observed {
+                guard let profile = registration.hello else { continue }
+                let handshake = handshakeFormatter.string(from: registration.lastSeen)
                 let packagedVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-                let versionMatches = profile.adapterVersion == packagedVersion
-                let versionStatus = versionMatches ? "compatible" : "does not match app v\(packagedVersion ?? "unknown"); reload the packaged extension"
-                let detail = "● Connected — last handshake \(handshake) · adapter v\(profile.adapterVersion ?? "unknown") \(versionStatus) · profile \(profile.installationID.prefix(8))"
-                let row = extensionRow(title: browser.displayName + " browser extension", detail: detail, green: versionMatches, bundleID: browser.rawValue)
+                let versionMatches = profile.adapterVersion == packagedVersion && registration.compatibility == .compatible
+                let connected = registration.isConnected && versionMatches
+                let state = registration.isConnected ? (versionMatches ? "Connected" : "Connected, incompatible") : "Disconnected"
+                let age = registration.isConnected ? "last handshake \(handshake)" : "last seen \(handshake); handshake expired"
+                let capabilities = profile.capabilities.sorted().joined(separator: ", ")
+                let compatibility = versionMatches ? "compatible with app v\(packagedVersion ?? "unknown")" : "adapter v\(profile.adapterVersion ?? "unknown") does not match app v\(packagedVersion ?? "unknown")"
+                let detail = "● \(state) · \(age)"
+                let metadata = "External extension · profile \(profile.installationID.prefix(8)) · \(compatibility)\nCapabilities: \(capabilities.isEmpty ? "none reported" : capabilities)"
+                let row = extensionRow(title: browser.displayName + " extension", detail: detail, green: connected, bundleID: browser.rawValue, metadata: metadata, profile: profile)
                 let migrated = configuredPath(for: profile)
-                let field = NSTextField(frame: NSRect(x: 350, y: 7, width: 275, height: 24)); field.placeholderString = "Complete browser Profile Path"; field.stringValue = migrated ?? ""; field.target = self; field.action = #selector(profilePathChanged(_:)); field.identifier = NSUserInterfaceItemIdentifier(profile.identityKey); row.addSubview(field); row.heightAnchor.constraint(equalToConstant: 48).isActive = true; stack.addArrangedSubview(row)
+                if let field = row.viewWithTag(42) as? NSTextField { field.stringValue = migrated ?? "" }
+                stack.addArrangedSubview(row)
+            }
+            for installationID in unobserved {
+                let identity = "\(browser.rawValue)|\(installationID)"
+                let metadata = "External extension · profile \(installationID.prefix(8)) · no handshake record is available"
+                let row = extensionRow(title: browser.displayName + " extension", detail: "● Disconnected · known from saved configuration", green: false, bundleID: browser.rawValue, metadata: metadata, profileIdentity: identity)
+                if let field = row.viewWithTag(42) as? NSTextField { field.stringValue = ProfileConfigurationStore.path(browser: browser.rawValue, installationID: installationID) ?? "" }
+                stack.addArrangedSubview(row)
             }
         }
+        for registration in registrations where registration.compatibility == .malformed {
+            stack.addArrangedSubview(extensionRow(title: "Unrecognized extension registration", detail: "● Disconnected · handshake data is malformed", green: false, metadata: "External extension · last seen \(handshakeFormatter.string(from: registration.lastSeen)) · reload the supported browser extension"))
+        }
         for row in [
-            extensionRow(title: "Finder folders", detail: "Built in · available when Finder Automation is allowed", green: true, bundleID: "com.apple.finder"),
-            extensionRow(title: "Preview documents", detail: AXIsProcessTrusted() ? "Built in · exact file documents available" : "Built in · Accessibility permission required for exact documents", green: AXIsProcessTrusted(), bundleID: PreviewAdapter.bundleIdentifier),
-            extensionRow(title: "Apple Notes", detail: "Built in · selected-note identity only · Automation requested on use", green: true, bundleID: NotesAdapter.bundleIdentifier),
-            extensionRow(title: "Application-only fallback", detail: "Built in · available for regular foreground applications", green: true)
-        ] { row.heightAnchor.constraint(equalToConstant: 48).isActive = true; stack.addArrangedSubview(row) }
-    }
-    private func lastHandshake(for profile: ExtensionHello) -> Date? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: bridgeRoot,
-            includingPropertiesForKeys: [.contentModificationDateKey]
-        ) else { return nil }
-        return urls.compactMap { url -> Date? in
-            guard let data = try? Data(contentsOf: url),
-                  let value = try? JSONDecoder().decode(ExtensionHello.self, from: data),
-                  value.identityKey == profile.identityKey,
-                  value.sessionID == profile.sessionID else { return nil }
-            return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        }.max()
+            extensionRow(title: "Finder folders", detail: "● Available · Automation permission requested when used", green: true, bundleID: "com.apple.finder", metadata: "Native integration · exact folder identity and reopening"),
+            extensionRow(title: "Preview documents", detail: AXIsProcessTrusted() ? "● Available · Accessibility access granted" : "● Unavailable · grant Accessibility access for exact documents", green: AXIsProcessTrusted(), bundleID: PreviewAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument file identity, Preview-specific opening, and verification"),
+            extensionRow(title: "Apple Notes", detail: "● Available · Automation permission requested when used", green: true, bundleID: NotesAdapter.bundleIdentifier, metadata: "Native integration · selected-note identity only"),
+            extensionRow(title: "Application-only fallback", detail: "● Available · no additional permission required", green: true, metadata: "Native integration · launches applications; does not restore document or window contents")
+        ] { stack.addArrangedSubview(row) }
+        for row in stack.arrangedSubviews { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
+        stack.layoutSubtreeIfNeeded()
+        let height = max(extensionDocumentView?.enclosingScrollView?.contentSize.height ?? 0, stack.fittingSize.height + 16)
+        extensionDocumentView?.frame.size.height = height
     }
     private var handshakeFormatter: DateFormatter { let f = DateFormatter(); f.dateStyle = .short; f.timeStyle = .medium; return f }
-    private func lastHandshake(browser: String) -> Date? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(at: bridgeRoot, includingPropertiesForKeys: [.contentModificationDateKey]) else { return nil }
-        return urls.compactMap { url -> Date? in
-            guard let data = try? Data(contentsOf: url), let value = try? JSONDecoder().decode(ExtensionHello.self, from: data), value.browser == browser else { return nil }
-            return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-        }.max()
-    }
     private func configuredPath(for profile: ExtensionHello) -> String? {
         if let saved = ProfileConfigurationStore.path(browser: profile.browser, installationID: profile.installationID) { return saved }
         guard let desktopStore = try? DesktopStore.applicationSupport() else { return nil }
@@ -280,13 +299,27 @@ final class SettingsController: NSObject, NSWindowDelegate {
         ProfileConfigurationStore.set(path, browser: profile.browser, installationID: profile.installationID)
         return path
     }
-    private func extensionRow(title: String, detail: String, green: Bool, bundleID: String? = nil) -> NSView {
-        let row = NSView(frame: NSRect(x: 0, y: 0, width: 635, height: 48))
-        let icon = NSImageView(frame: NSRect(x: 8, y: 13, width: 24, height: 24))
+    private func extensionRow(title: String, detail: String, green: Bool, bundleID: String? = nil, metadata: String, profile: ExtensionHello? = nil, profileIdentity: String? = nil) -> NSView {
+        let hasProfile = profile != nil || profileIdentity != nil
+        let row = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: hasProfile ? 112 : 76)); row.translatesAutoresizingMaskIntoConstraints = false
+        let icon = NSImageView(); icon.translatesAutoresizingMaskIntoConstraints = false
         icon.image = bundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: "Integration")
-        row.addSubview(icon)
-        let t = NSTextField(labelWithString: title); t.font = .systemFont(ofSize: 13, weight: .semibold); t.frame = NSRect(x: 42, y: 25, width: 290, height: 20); row.addSubview(t)
-        let d = NSTextField(labelWithString: detail); d.textColor = green ? .systemGreen : .systemRed; d.frame = NSRect(x: 42, y: 4, width: 585, height: 20); row.addSubview(d)
+        let t = NSTextField(labelWithString: title); t.translatesAutoresizingMaskIntoConstraints = false; t.font = .systemFont(ofSize: 13, weight: .semibold)
+        let d = NSTextField(labelWithString: detail); d.translatesAutoresizingMaskIntoConstraints = false; d.textColor = green ? .systemGreen : .systemRed
+        let m = NSTextField(wrappingLabelWithString: metadata); m.translatesAutoresizingMaskIntoConstraints = false; m.textColor = .secondaryLabelColor; m.maximumNumberOfLines = 2
+        row.addSubview(icon); row.addSubview(t); row.addSubview(d); row.addSubview(m)
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: hasProfile ? 112 : 76),
+            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 6), icon.topAnchor.constraint(equalTo: row.topAnchor, constant: 7), icon.widthAnchor.constraint(equalToConstant: 28), icon.heightAnchor.constraint(equalToConstant: 28),
+            t.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), t.topAnchor.constraint(equalTo: row.topAnchor, constant: 4), t.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6),
+            d.leadingAnchor.constraint(equalTo: t.leadingAnchor), d.topAnchor.constraint(equalTo: t.bottomAnchor, constant: 1), d.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6),
+            m.leadingAnchor.constraint(equalTo: t.leadingAnchor), m.topAnchor.constraint(equalTo: d.bottomAnchor, constant: 1), m.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6)
+        ])
+        if hasProfile {
+            let field = NSTextField(); field.translatesAutoresizingMaskIntoConstraints = false; field.tag = 42; field.placeholderString = "Complete browser Profile Path"; field.target = self; field.action = #selector(profilePathChanged(_:)); field.identifier = NSUserInterfaceItemIdentifier(profile?.identityKey ?? profileIdentity!)
+            row.addSubview(field)
+            NSLayoutConstraint.activate([field.leadingAnchor.constraint(equalTo: t.leadingAnchor), field.topAnchor.constraint(equalTo: m.bottomAnchor, constant: 4), field.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -6), field.heightAnchor.constraint(equalToConstant: 24)])
+        }
         return row
     }
     @objc private func profilePathChanged(_ sender: NSTextField) { guard let identity = sender.identifier?.rawValue, let split = identity.firstIndex(of: "|") else { return }; let browser = String(identity[..<split]), id = String(identity[identity.index(after: split)...]); let path = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines); if !path.isEmpty && !path.hasPrefix("/") { show("Profile Path must be a complete absolute path."); return }; ProfileConfigurationStore.set(path.isEmpty ? nil : path, browser: browser, installationID: id) }
