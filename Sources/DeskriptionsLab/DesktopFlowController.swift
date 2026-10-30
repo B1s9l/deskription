@@ -9,6 +9,8 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
     private let finderAdapter = FinderAdapter()
     private let previewAdapter = PreviewAdapter()
     private let powerPointAdapter = PowerPointAdapter()
+    private let wordAdapter = WordAdapter()
+    private let excelAdapter = ExcelAdapter()
     private let documentRestorer = DocumentRestorer()
     private let notesAdapter = NotesAdapter()
     private let genericAdapter = GenericApplicationAdapter()
@@ -56,7 +58,7 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
         super.init()
     }
 
-    private var documentAdapters: [any DocumentDiscoveryAdapter] { [previewAdapter, powerPointAdapter] }
+    private var documentAdapters: [any DocumentDiscoveryAdapter] { [previewAdapter, powerPointAdapter, wordAdapter, excelAdapter] }
 
     func openSaveDesktop() {
         NSApp.activate(ignoringOtherApps: true)
@@ -142,6 +144,14 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
                 do { return .documents(PowerPointAdapter.bundleIdentifier, try await powerPointAdapter.inventoryWithRetry(), nil) }
                 catch { return .documents(PowerPointAdapter.bundleIdentifier, [], error.localizedDescription) }
             }
+            group.addTask { [wordAdapter] in
+                do { return .documents(WordAdapter.bundleIdentifier, try await wordAdapter.inventoryWithRetry(), nil) }
+                catch { return .documents(WordAdapter.bundleIdentifier, [], error.localizedDescription) }
+            }
+            group.addTask { [excelAdapter] in
+                do { return .documents(ExcelAdapter.bundleIdentifier, try await excelAdapter.inventoryWithRetry(), nil) }
+                catch { return .documents(ExcelAdapter.bundleIdentifier, [], error.localizedDescription) }
+            }
             for await part in group {
                 guard !Task.isCancelled, inventoryGeneration == generation else { group.cancelAll(); return }
                 switch part {
@@ -162,6 +172,8 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
         // Partial discovery must not leak a second generic PowerPoint group with
         // the same windows. If no exact file is found, generic fallback remains.
         if discovered.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
+        if discovered.contains(where: { $0.applicationBundleID == WordAdapter.bundleIdentifier }) { dedicated.insert(WordAdapter.bundleIdentifier) }
+        if discovered.contains(where: { $0.applicationBundleID == ExcelAdapter.bundleIdentifier }) { dedicated.insert(ExcelAdapter.bundleIdentifier) }
         if !noteObservations.isEmpty { dedicated.insert(NotesAdapter.bundleIdentifier) }
         let ownBundleID = Bundle.main.bundleIdentifier
         let generic = await Task.detached(priority: .userInitiated) {
@@ -363,6 +375,10 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
                 ? Task.detached(priority: .userInitiated) { [previewAdapter] in try await previewAdapter.inventoryWithRetry() }.value : []
             async let powerPointWork = selectedDocumentKeys.contains(where: { $0.hasPrefix("\(PowerPointAdapter.bundleIdentifier)|") })
                 ? Task.detached(priority: .userInitiated) { [powerPointAdapter] in try await powerPointAdapter.inventoryWithRetry() }.value : []
+            async let wordWork = selectedDocumentKeys.contains(where: { $0.hasPrefix("\(WordAdapter.bundleIdentifier)|") })
+                ? Task.detached(priority: .userInitiated) { [wordAdapter] in try await wordAdapter.inventoryWithRetry() }.value : []
+            async let excelWork = selectedDocumentKeys.contains(where: { $0.hasPrefix("\(ExcelAdapter.bundleIdentifier)|") })
+                ? Task.detached(priority: .userInitiated) { [excelAdapter] in try await excelAdapter.inventoryWithRetry() }.value : []
             let finderResult = await finderWork
             let notesResult = await notesWork
             let freshFinder: [FinderFolderObservation]
@@ -373,7 +389,7 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
                 show("Inventory changed", "A selected Finder window changed or disappeared. Review the inventory and save again; nothing was closed."); return
             }
             let freshDocuments: [DocumentObservation]
-            do { freshDocuments = try await previewWork + powerPointWork }
+            do { freshDocuments = try await previewWork + powerPointWork + wordWork + excelWork }
             catch { show("Desktop wasn’t saved", error.localizedDescription); return }
             guard selectedDocumentKeys.isSubset(of: Set(freshDocuments.map(\.identityKey))) else { show("Inventory changed", "A selected document changed or disappeared. Review the inventory and save again; nothing was closed."); return }
             let freshNotes: [NoteObservation]
@@ -383,6 +399,8 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
             var dedicated = Set(fresh.map(\.browser))
             if freshDocuments.contains(where: { $0.applicationBundleID == PreviewAdapter.bundleIdentifier }) { dedicated.insert(PreviewAdapter.bundleIdentifier) }
             if freshDocuments.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
+            if freshDocuments.contains(where: { $0.applicationBundleID == WordAdapter.bundleIdentifier }) { dedicated.insert(WordAdapter.bundleIdentifier) }
+            if freshDocuments.contains(where: { $0.applicationBundleID == ExcelAdapter.bundleIdentifier }) { dedicated.insert(ExcelAdapter.bundleIdentifier) }
             if !freshNotes.isEmpty { dedicated.insert(NotesAdapter.bundleIdentifier) }
             let nativeSnapshot = allNativeWindows()
             let ownBundleID = Bundle.main.bundleIdentifier
@@ -420,7 +438,7 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
         let savedDocuments = freshDocuments.filter { selectedDocumentKeys.contains($0.identityKey) }.map(\.savedReference)
         let savedNotes = freshNotes.filter { selectedNoteIDs.contains($0.identifier) }.map { SavedNote(noteIdentifier: $0.identifier, displayName: $0.displayName) }
         let savedApplications = ApplicationFallback.deduplicated(freshGeneric.filter { selectedGenericBundleIDs.contains($0.bundleIdentifier) }.map { SavedApplication(bundleIdentifier: $0.bundleIdentifier, displayName: $0.displayName, savedBundlePath: $0.bundlePath) })
-        let desktop = SavedDesktop(name: name, profiles: savedProfiles, finderFolders: savedFinder, documents: savedDocuments, notes: savedNotes, applications: savedApplications, limitations: ["Restoration opens windows in the current working environment. Window placement is not independently verified.", "Finder folders, PowerPoint documents, and Notes remain open after saving.", "Preview documents close only when their exact Accessibility document identity is still verified; unsaved-change prompts are preserved.", "Application-only entries reopen the application; their window contents are not restored and their windows remain open after saving.", "Page-internal state and protected content are not saved."])
+        let desktop = SavedDesktop(name: name, profiles: savedProfiles, finderFolders: savedFinder, documents: savedDocuments, notes: savedNotes, applications: savedApplications, limitations: ["Restoration opens windows in the current working environment. Window placement is not independently verified.", "Finder folders, Microsoft Office documents, and Notes remain open after saving.", "Preview documents close only when their exact Accessibility document identity is still verified; unsaved-change prompts are preserved.", "Application-only entries reopen the application; their window contents are not restored and their windows remain open after saving.", "Page-internal state and protected content are not saved."])
         let behavior = afterSavePreferences.behavior(hasExistingDesktops: !store.list().desktops.isEmpty)
         do { try store.save(desktop); advanceDesktopCounter() } catch { show("Desktop wasn’t saved", error.localizedDescription); return }
         if retentionPreferences.isEnabled {

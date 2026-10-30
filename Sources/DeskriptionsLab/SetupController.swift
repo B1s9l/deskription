@@ -29,7 +29,7 @@ import DeskriptionsCore
             let extensionVersions = Set(profiles.compactMap(\.adapterVersion)).sorted().joined(separator: ", ")
             statusLabel?.stringValue = """
             Accessibility:        \(accessibility)
-            Automation:           requested on use for Finder, Notes, and PowerPoint
+            Automation:           requested on use for Finder, Notes, and Microsoft Office
             Screen Recording:     NOT USED
             Browser extension:    \(connection)
 
@@ -40,7 +40,7 @@ import DeskriptionsCore
             Extension version:     \(extensionVersions.isEmpty ? "not checked — no compatible live connection" : extensionVersions)
             Adapter protocol:      app v\(protocolVersion); incompatible observations: \(issues.incompatible)
 
-            Accessibility is used only for exact document identity and verification. Finder, Notes, and PowerPoint request application-specific Automation only when needed. Deskriptions no longer captures or streams windows and does not request Screen Recording access.
+            Accessibility is used only for exact document identity and verification. Finder, Notes, PowerPoint, Word, and Excel request application-specific Automation only when needed. Deskriptions no longer captures or streams windows and does not request Screen Recording access.
             """
         }
     }

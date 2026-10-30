@@ -300,10 +300,16 @@ final class SettingsController: NSObject, NSWindowDelegate, NSTabViewDelegate {
         let powerPointInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: PowerPointAdapter.bundleIdentifier) != nil
         let powerPointDetail = !powerPointInstalled ? "● Unavailable · Microsoft PowerPoint is not installed" : AXIsProcessTrusted() ? "● Available · Accessibility enabled; Automation may be requested for multiple files" : "● Unavailable · grant Accessibility for exact presentation identity"
         let powerPointRow = extensionRow(title: "Microsoft PowerPoint presentations", detail: powerPointDetail, green: powerPointInstalled && AXIsProcessTrusted(), bundleID: PowerPointAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument identity with PowerPoint Automation fallback for multiple presentations, explicit PowerPoint opening, and verification.", actionTitle: powerPointInstalled ? "Open Settings…" : nil, action: powerPointInstalled ? #selector(openAutomationSettings) : nil)
+        let wordInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: WordAdapter.bundleIdentifier) != nil
+        let wordRow = extensionRow(title: "Microsoft Word documents", detail: wordInstalled ? "● Available · Automation may be requested for exact files" : "● Unavailable · Microsoft Word is not installed", green: wordInstalled, bundleID: WordAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument identity with Word Automation fallback, explicit Word opening, and verification.", actionTitle: wordInstalled ? "Open Settings…" : nil, action: wordInstalled ? #selector(openAutomationSettings) : nil)
+        let excelInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ExcelAdapter.bundleIdentifier) != nil
+        let excelRow = extensionRow(title: "Microsoft Excel workbooks", detail: excelInstalled ? "● Available · Automation may be requested for exact files" : "● Unavailable · Microsoft Excel is not installed", green: excelInstalled, bundleID: ExcelAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument identity with Excel Automation fallback, explicit Excel opening, and verification.", actionTitle: excelInstalled ? "Open Settings…" : nil, action: excelInstalled ? #selector(openAutomationSettings) : nil)
         for row in [
             extensionRow(title: "Finder folders", detail: "● Available · Automation permission requested when used", green: true, bundleID: "com.apple.finder", metadata: "Native integration · exact folder identity and reopening"),
             previewRow,
             powerPointRow,
+            wordRow,
+            excelRow,
             extensionRow(title: "Apple Notes", detail: "● Available · Automation permission requested when used", green: true, bundleID: NotesAdapter.bundleIdentifier, metadata: "Native integration · selected-note identity only"),
             extensionRow(title: "Application-only fallback", detail: "● Available · no additional permission required", green: true, metadata: "Native integration · launches applications; does not restore document or window contents")
         ] { stack.addArrangedSubview(row) }
@@ -393,7 +399,7 @@ final class SettingsController: NSObject, NSWindowDelegate, NSTabViewDelegate {
         for (index,item) in buttons.enumerated() { let b = NSButton(title:item.0,target:self,action:item.1); b.frame = NSRect(x:24+CGFloat(index%2)*220,y:230-CGFloat(index/2)*42,width:205,height:32); v.addSubview(b) }
         return v
     }
-    private func refreshDiagnostics() { Task { let profiles = await bridge.connectedProfiles(), issues = await bridge.connectionIssueCounts(); await MainActor.run { self.diagnosticsLabel?.stringValue = "Browser extension connections: \(profiles.count) live (65-second freshness)\nIncompatible observations: \(issues.incompatible)\nAccessibility: \(AXIsProcessTrusted() ? "working for exact Preview and PowerPoint documents" : "optional; needed for Accessibility document identity")\nAutomation: requested only by Finder, Notes, and PowerPoint when needed\nScreen Recording: not used\nMission Control automation: not used" } } }
+    private func refreshDiagnostics() { Task { let profiles = await bridge.connectedProfiles(), issues = await bridge.connectionIssueCounts(); await MainActor.run { self.diagnosticsLabel?.stringValue = "Browser extension connections: \(profiles.count) live (65-second freshness)\nIncompatible observations: \(issues.incompatible)\nAccessibility: \(AXIsProcessTrusted() ? "working for exact document identity" : "optional; used for Accessibility document identity")\nAutomation: requested only by Finder, Notes, PowerPoint, Word, and Excel when needed\nScreen Recording: not used\nMission Control automation: not used" } } }
     @objc private func openLegacySetup() { (NSApp.delegate as? AppDelegate)?.showSetupFromSettings() }
     @objc private func nativeInventory() { actions.nativeInventory() }; @objc private func exportDiagnostics() { actions.exportDiagnostics() }; @objc private func recentStatus() { actions.recentStatus() }
 

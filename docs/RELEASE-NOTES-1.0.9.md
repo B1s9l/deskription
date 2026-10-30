@@ -11,5 +11,6 @@
 - Populates browser, Finder, Notes, Preview, and PowerPoint inventory sections progressively while keeping Save disabled until collection is complete.
 - Build 49 removes the floating ScreenCaptureKit preview feature, its shortcut, menu items, capture diagnostics, and Screen Recording usage description while preserving Preview.app document restoration.
 - PowerPoint restoration now uses one bounded Automation confirmation after targeted Accessibility polling and distinguishes an accepted but unverifiable open command from a confirmed failure.
+- Build 50 adds exact-document discovery and explicit restoration for Microsoft Word documents and Microsoft Excel workbooks, using Accessibility with bounded Automation fallback and the shared document-restoration infrastructure.
 
 This is a development artifact. It has not been notarized or published.
