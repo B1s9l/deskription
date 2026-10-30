@@ -4,7 +4,6 @@ Deskriptions is a free, open-source macOS menu-bar application for keeping usefu
 
 Its two main features are:
 
-- **Live window previews:** Pin a movable, resizable, always-on-top preview of another application's window. A preview can remain visible while you work in another macOS desktop or a fullscreen app—for example, to watch a build, reference a document, or keep a dashboard in view.
 - **Saved Desktops:** Save a collection of supported applications and content, then reopen it later. A Desktop can include Chromium browser windows and tabs, Finder folders, Preview documents, selected Apple Notes, and application-only entries. This is useful when switching projects or resuming a task without reconstructing the same working set by hand.
 
 Deskriptions restores only what each supported integration can identify safely. It does not promise to reproduce every application's internal state, unsaved work, or macOS Space placement. All data stays local, and there are no accounts, cloud services, or telemetry.
@@ -13,7 +12,7 @@ Copyright © 2026 [B1s9l](https://github.com/B1s9l). Deskriptions is licensed un
 
 ## Components
 
-- `Deskriptions`: menu-bar app with Save Desktop, Desktops, privacy-conscious diagnostics, and ScreenCaptureKit previews.
+- `Deskriptions`: menu-bar app with Save Desktop, Desktops, document-aware integrations, and privacy-conscious diagnostics.
 - `deskriptions-bridge`: browser-specific native-messaging host; validates protocol and browser identity and journals messages per browser/profile.
 - `extension/`: unpacked Manifest V3 Chromium extension that inventories windows/tabs and performs idempotent restores.
 - `deskriptions-diagnose`: prints native Chrome windows, extension observations, and explicit match status.
@@ -70,7 +69,7 @@ After that one-time setup, build, submit, wait for acceptance, save the notariza
 
 Pass another Keychain profile name as the first argument when needed. The script stops on missing credentials, rejection, failed stapling, invalid signatures, or Gatekeeper rejection. It never stores authentication secrets in the source tree.
 
-Grant **Screen & System Audio Recording** when macOS asks. Apple’s current sample notes that a first-time grant can require quitting and reopening the app. Settings → Diagnostics provides the functional ScreenCaptureKit checks. The default shortcuts are Save Desktop `Control-Option-S`, Load Desktop `Control-Option-L`, and Pin focused window `Control-Option-P`; they can be changed or cleared in Settings → Keyboard Shortcuts.
+The default shortcuts are Save Desktop `Control-Option-S` and Load Desktop `Control-Option-L`; they can be changed or cleared in Settings → Keyboard Shortcuts. Deskriptions does not capture windows and does not require Screen Recording access.
 
 The global event monitor may require **Input Monitoring** on some macOS configurations. The menu command remains available without it. Accessibility is optional and used only for exact Preview-document discovery; Deskriptions does not use Mission Control automation. Finder folder support requires **Automation → Finder**: open Save Desktop once and allow the focused Deskriptions prompt. If denied, enable Finder for Deskriptions in System Settings → Privacy & Security → Automation. Notes requests its own Automation permission only when its selected-note integration is used.
 
@@ -78,7 +77,6 @@ Finder rows contain exact folder locations obtained from Finder, not paths guess
 
 Preview and Microsoft PowerPoint use the shared exact-document restoration path. Both prefer public `AXDocument` file URLs with Accessibility permission; PowerPoint uses its public Automation dictionary as a bounded fallback for multiple saved presentations. Each file is reopened explicitly with its original application and verified; unsaved, inaccessible, or unidentified content falls back to application-only restoration. Apple Notes has a privacy-limited built-in adapter using its supported scripting dictionary: it saves only the stable identifier and name of the currently selected note and reopens that exact note without reading its body. Notes remains open after saving because selective closure cannot be verified safely.
 
-Live previews use ScreenCaptureKit with bounded automatic recovery for stream interruptions, display changes, and unambiguous window recreation during fullscreen transitions. Capture recovery cannot force browsers or other source applications to generate new video frames when they deliberately throttle background rendering; protected content can remain blank.
 
 Ordinary foreground applications without a dedicated adapter appear once per application in Save Desktop. Loading launches or activates that application and verifies that it is running; it does not restore the application’s previous windows or internal content. These application-only entries remain open after saving. Chrome and Finder use their dedicated content-aware integrations instead and are not duplicated in this fallback list.
 

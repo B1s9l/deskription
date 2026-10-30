@@ -90,7 +90,9 @@ final class PreviewAdapter: DocumentDiscoveryAdapter {
     }
 
     func restore(_ saved: SavedPreviewDocument) async throws -> PreviewDocumentObservation {
-        try await DocumentRestorer().restore(SavedDocumentReference(saved), using: self)
+        let result = try await DocumentRestorer().restore(SavedDocumentReference(saved), using: self)
+        guard let observation = result.observation else { throw AdapterError.verificationFailed(saved.path) }
+        return observation
     }
 
     func close(_ saved: SavedPreviewDocument) async throws -> Bool { try await close(path: saved.path) }

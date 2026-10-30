@@ -136,6 +136,38 @@ final class PowerPointAdapter: DocumentDiscoveryAdapter {
                                    identityMetadata: ["discovery": "AXDocument-targeted"])
     }
 
+    /// PowerPoint can finish opening a presentation before its window publishes
+    /// AXDocument. Run the fast, bounded Automation path query once after AX polling
+    /// is exhausted; unlike inventoryWithRetry this is never called in the poll loop.
+    func finalVerification(forPath path: String) async throws -> DocumentObservation? {
+        if let accessibility = try await observation(forPath: path) { return accessibility }
+        let separator = "\u{001e}"
+        let source = """
+        with timeout of 3 seconds
+        tell application id "\(Self.bundleIdentifier)"
+            set presentationPaths to full name of every presentation
+            set previousDelimiters to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to "\(separator)"
+            set output to presentationPaths as text
+            set AppleScript's text item delimiters to previousDelimiters
+            return output
+        end tell
+        end timeout
+        """
+        let wanted = URL(fileURLWithPath: path).standardizedFileURL.path
+        let output = try await executeAppleScript(source)
+        guard output.split(separator: Character(separator), omittingEmptySubsequences: true).contains(where: {
+            let candidate = String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+            return exactFileURL(fullName: candidate, directory: "", name: "")?.standardizedFileURL.path == wanted
+        }), let running = NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleIdentifier).first(where: { !$0.isTerminated }) else { return nil }
+        return DocumentObservation(applicationBundleID: Self.bundleIdentifier,
+                                   applicationBundlePath: running.bundleURL?.path,
+                                   path: wanted,
+                                   displayName: URL(fileURLWithPath: wanted).lastPathComponent,
+                                   onScreen: isOnScreen(path: wanted, displayName: URL(fileURLWithPath: wanted).lastPathComponent, pid: running.processIdentifier),
+                                   identityMetadata: ["discovery": "PowerPointAutomationVerification"])
+    }
+
     private func exactFileURL(fullName: String, directory: String, name: String) -> URL? {
         let full = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         if full.hasPrefix("file:"), let url = URL(string: full), url.isFileURL { return url }

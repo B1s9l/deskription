@@ -18,7 +18,7 @@ enum ProfileConfigurationStore {
 @MainActor
 final class SettingsController: NSObject, NSWindowDelegate, NSTabViewDelegate {
     struct Actions {
-        let chooseWindow: () -> Void, nativeInventory: () -> Void, exportDiagnostics: () -> Void, recentStatus: () -> Void
+        let nativeInventory: () -> Void, exportDiagnostics: () -> Void, recentStatus: () -> Void
     }
     private let bridge = FileAdapterBridge()
     private let shortcuts: ShortcutManager
@@ -389,13 +389,13 @@ final class SettingsController: NSObject, NSWindowDelegate, NSTabViewDelegate {
 
     private func diagnosticsView() -> NSView {
         let v = page(); heading("Diagnostics", y: 445, in: v); let label = NSTextField(wrappingLabelWithString: "Checking…"); label.font = .monospacedSystemFont(ofSize: 11, weight: .regular); label.frame = NSRect(x: 24, y: 280, width: 650, height: 150); v.addSubview(label); diagnosticsLabel = label
-        let buttons: [(String, Selector)] = [("Setup & permission status…", #selector(openLegacySetup)), ("Choose preview window…", #selector(chooseWindow)), ("Print native inventory", #selector(nativeInventory)), ("Export Diagnostics…", #selector(exportDiagnostics)), ("Recent Status…", #selector(recentStatus))]
+        let buttons: [(String, Selector)] = [("Setup & permission status…", #selector(openLegacySetup)), ("Print native inventory", #selector(nativeInventory)), ("Export Diagnostics…", #selector(exportDiagnostics)), ("Recent Status…", #selector(recentStatus))]
         for (index,item) in buttons.enumerated() { let b = NSButton(title:item.0,target:self,action:item.1); b.frame = NSRect(x:24+CGFloat(index%2)*220,y:230-CGFloat(index/2)*42,width:205,height:32); v.addSubview(b) }
         return v
     }
-    private func refreshDiagnostics() { Task { let profiles = await bridge.connectedProfiles(), issues = await bridge.connectionIssueCounts(); await MainActor.run { self.diagnosticsLabel?.stringValue = "Capture preflight: \(CGPreflightScreenCaptureAccess() ? "granted" : "not granted or restart required")\nBrowser extension connections: \(profiles.count) live (65-second freshness)\nIncompatible observations: \(issues.incompatible)\nAccessibility: \(AXIsProcessTrusted() ? "working for Preview documents" : "optional; needed for Preview exact documents")\nMission Control automation: not used\nUse Setup & permission status for the functional ScreenCaptureKit probe and bridge repair." } } }
+    private func refreshDiagnostics() { Task { let profiles = await bridge.connectedProfiles(), issues = await bridge.connectionIssueCounts(); await MainActor.run { self.diagnosticsLabel?.stringValue = "Browser extension connections: \(profiles.count) live (65-second freshness)\nIncompatible observations: \(issues.incompatible)\nAccessibility: \(AXIsProcessTrusted() ? "working for exact Preview and PowerPoint documents" : "optional; needed for Accessibility document identity")\nAutomation: requested only by Finder, Notes, and PowerPoint when needed\nScreen Recording: not used\nMission Control automation: not used" } } }
     @objc private func openLegacySetup() { (NSApp.delegate as? AppDelegate)?.showSetupFromSettings() }
-    @objc private func chooseWindow() { actions.chooseWindow() }; @objc private func nativeInventory() { actions.nativeInventory() }; @objc private func exportDiagnostics() { actions.exportDiagnostics() }; @objc private func recentStatus() { actions.recentStatus() }
+    @objc private func nativeInventory() { actions.nativeInventory() }; @objc private func exportDiagnostics() { actions.exportDiagnostics() }; @objc private func recentStatus() { actions.recentStatus() }
 
     private func creditsView() -> NSView {
         let v = page(); heading("Deskriptions", y: 445, in: v); let version = Bundle.main.object(forInfoDictionaryKey:"CFBundleShortVersionString") as? String ?? "development", build = Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "development"

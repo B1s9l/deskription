@@ -9,5 +9,7 @@
 - Reduces the bounded Preview identity retry from eight seconds to two seconds.
 - Uses PowerPoint's fast bulk `full name of every presentation` query instead of slow per-document property access.
 - Populates browser, Finder, Notes, Preview, and PowerPoint inventory sections progressively while keeping Save disabled until collection is complete.
+- Build 49 removes the floating ScreenCaptureKit preview feature, its shortcut, menu items, capture diagnostics, and Screen Recording usage description while preserving Preview.app document restoration.
+- PowerPoint restoration now uses one bounded Automation confirmation after targeted Accessibility polling and distinguishes an accepted but unverifiable open command from a confirmed failure.
 
 This is a development artifact. It has not been notarized or published.

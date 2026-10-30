@@ -658,9 +658,15 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
                 updateProgress("Opening \(document.displayName) in \(applicationName)…")
                 guard let adapter else { results.append("\(applicationName): no document adapter is available; the saved document was not opened with an unverified application."); continue }
                 do {
-                    _ = try await documentRestorer.restore(document, using: adapter)
-                    results.append("\(applicationName): opened or reused and verified — \(document.path)")
-                    successfulDocuments += 1
+                    let restored = try await documentRestorer.restore(document, using: adapter)
+                    switch restored.verification {
+                    case .verifiedExact:
+                        results.append("\(applicationName): exact document opened or reused and verified — \(document.path)")
+                        successfulDocuments += 1
+                    case .commandAcceptedVerificationUnavailable:
+                        results.append("\(applicationName): open command was accepted for \(document.path), but the application did not expose enough identity information to verify the resulting window.")
+                        attempt.status = .indeterminate
+                    }
                 } catch { results.append("\(applicationName): \(error.localizedDescription)") }
             }
         }

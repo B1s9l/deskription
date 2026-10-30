@@ -23,7 +23,7 @@ cp "$root/app/Info.plist" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Deskriptions" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier org.deskriptions.app" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 48" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 49" "$app/Contents/Info.plist"
 cp "$root/Assets/AppIcon.iconset/icon_512x512@2x.png" "$app/Contents/Resources/Deskriptions.png"
 chmod 755 "$app/Contents/MacOS/DeskriptionsLab" "$app/Contents/Resources/deskriptions-bridge" "$app/Contents/Resources/deskriptions-bridge-chrome" "$app/Contents/Resources/deskriptions-bridge-brave" "$app/Contents/Resources/deskriptions-bridge-edge"
 if [[ "${DESKRIPTIONS_ALLOW_ADHOC_RELEASE:-0}" == 1 ]]; then

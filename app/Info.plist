@@ -7,10 +7,9 @@
   <key>CFBundleDisplayName</key><string>Deskriptions</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0.9</string>
-  <key>CFBundleVersion</key><string>48</string>
+  <key>CFBundleVersion</key><string>49</string>
   <key>CFBundleIconFile</key><string>Deskriptions.png</string>
   <key>LSUIElement</key><true/>
-  <key>NSScreenCaptureUsageDescription</key><string>Deskriptions captures only the window you explicitly pin as a live preview.</string>
   <key>NSAppleEventsUsageDescription</key><string>Deskriptions uses application-specific Automation to identify selected Finder folders, Apple Notes, and saved Microsoft PowerPoint presentations so they can be reopened precisely.</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

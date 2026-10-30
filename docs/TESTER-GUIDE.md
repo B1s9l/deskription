@@ -6,15 +6,14 @@
 2. Run `install-release-bridge.sh` from the extracted folder. It registers the bridge embedded inside that app; rerunning it safely replaces the same user-level registration.
 3. Open `chrome://extensions`, `brave://extensions`, or `edge://extensions`, enable Developer mode, choose **Load unpacked**, and select the supplied `Chrome Extension` folder.
 4. Reload the extension and click its toolbar button. Open the browser's version page and copy the complete **Profile Path** into Settings → Extensions.
-5. Grant Screen & System Audio Recording only if testing live previews. Use Setup & Status to run the functional capture check; quit and reopen only when macOS still reports that the first grant requires it. The global shortcuts may require Input Monitoring; menu commands remain available.
+5. Deskriptions does not require Screen Recording access. Grant Accessibility only when testing exact Preview or PowerPoint document identity, and application-specific Automation when Finder, Notes, or PowerPoint requests it.
 
-Default shortcuts are Control-Option-P for a live preview, Control-Option-S for Save Desktop, and Control-Option-L for Load Desktop. They can be changed or cleared in Settings.
+Default shortcuts are Control-Option-S for Save Desktop and Control-Option-L for Load Desktop. They can be changed or cleared in Settings.
 
 ## Suggested disposable tests
 
 - Save only selected `example.com` tabs while another disposable tab stays open; then load the saved Desktop.
 - Repeat a load as a new load, then interrupt another load and choose Retry. Report whether groups or tabs duplicate.
-- Pin a TextEdit or disposable browser-window preview, move between Spaces/fullscreen, minimize/restore the source, replace the preview, and dismiss it.
 - Temporarily disable the unpacked extension and confirm the recovery message. Re-enable it afterward.
 - Confirm loading begins directly in the current macOS desktop without a Space-creation or fallback prompt. Deskriptions must never remove a Space.
 

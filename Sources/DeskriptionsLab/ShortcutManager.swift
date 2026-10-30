@@ -9,10 +9,9 @@ struct ShortcutBinding: Codable, Equatable {
 
 @MainActor
 final class ShortcutManager {
-    enum Action: UInt32, CaseIterable { case pin = 1, save = 2, load = 3
-        var title: String { switch self { case .pin: return "Pin focused window"; case .save: return "Save Desktop"; case .load: return "Load Desktop" } }
+    enum Action: UInt32, CaseIterable { case save = 2, load = 3
+        var title: String { switch self { case .save: return "Save Desktop"; case .load: return "Load Desktop" } }
         var defaults: ShortcutBinding { switch self {
-        case .pin: return .init(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(controlKey | optionKey), display: "⌃⌥P")
         case .save: return .init(keyCode: UInt32(kVK_ANSI_S), modifiers: UInt32(controlKey | optionKey), display: "⌃⌥S")
         case .load: return .init(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | optionKey), display: "⌃⌥L")
         } }

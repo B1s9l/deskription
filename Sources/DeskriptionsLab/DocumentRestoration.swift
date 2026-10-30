@@ -20,6 +20,7 @@ protocol DocumentDiscoveryAdapter: AnyObject {
     var applicationDisplayName: String { get }
     func inventoryWithRetry() async throws -> [DocumentObservation]
     func observation(forPath path: String) async throws -> DocumentObservation?
+    func finalVerification(forPath path: String) async throws -> DocumentObservation?
     func bringToFront(path: String) throws
     func close(path: String) async throws -> Bool
 }
@@ -30,6 +31,13 @@ extension DocumentDiscoveryAdapter {
         let wanted = URL(fileURLWithPath: path).standardizedFileURL.path
         return try await inventoryWithRetry().first { URL(fileURLWithPath: $0.path).standardizedFileURL.path == wanted }
     }
+    func finalVerification(forPath path: String) async throws -> DocumentObservation? { try await observation(forPath: path) }
+}
+
+struct DocumentRestorationResult {
+    enum Verification: Equatable { case verifiedExact, commandAcceptedVerificationUnavailable }
+    let observation: DocumentObservation?
+    let verification: Verification
 }
 
 @MainActor
@@ -50,7 +58,7 @@ final class DocumentRestorer {
         }
     }
 
-    func restore(_ saved: SavedDocumentReference, using adapter: any DocumentDiscoveryAdapter, timeout: Duration = .seconds(10)) async throws -> DocumentObservation {
+    func restore(_ saved: SavedDocumentReference, using adapter: any DocumentDiscoveryAdapter, timeout: Duration = .seconds(10)) async throws -> DocumentRestorationResult {
         guard saved.applicationBundleID == adapter.applicationBundleID else {
             throw RestorationError.applicationIdentityMismatch(saved.applicationBundleID)
         }
@@ -63,7 +71,7 @@ final class DocumentRestorer {
 
         if let existing = try await adapter.observation(forPath: fileURL.path) {
             try adapter.bringToFront(path: fileURL.path)
-            return existing
+            return .init(observation: existing, verification: .verifiedExact)
         }
 
         let applicationURL = try locateApplication(for: saved)
@@ -81,11 +89,19 @@ final class DocumentRestorer {
         repeat {
             if let verified = try? await adapter.observation(forPath: fileURL.path) {
                 try adapter.bringToFront(path: fileURL.path)
-                return verified
+                return .init(observation: verified, verification: .verifiedExact)
             }
             try? await Task.sleep(for: .milliseconds(250))
         } while clock.now < deadline
-        throw RestorationError.verificationFailed(saved.path)
+        // Some applications accept and complete the explicit open request before
+        // publishing AXDocument. Give the adapter one bounded, application-specific
+        // confirmation opportunity; this must not rebuild a full inventory in each
+        // polling iteration.
+        if let verified = try? await adapter.finalVerification(forPath: fileURL.path) {
+            try adapter.bringToFront(path: fileURL.path)
+            return .init(observation: verified, verification: .verifiedExact)
+        }
+        return .init(observation: nil, verification: .commandAcceptedVerificationUnavailable)
     }
 
     private func locateApplication(for saved: SavedDocumentReference) throws -> URL {
