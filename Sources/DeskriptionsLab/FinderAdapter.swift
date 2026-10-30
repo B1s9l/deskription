@@ -8,7 +8,6 @@ struct FinderFolderObservation: Equatable {
     let onScreen: Bool
 }
 
-@MainActor
 final class FinderAdapter {
     enum AdapterError: LocalizedError {
         case automationDenied(String)

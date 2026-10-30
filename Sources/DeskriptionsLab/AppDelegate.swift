@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 @preconcurrency import ScreenCaptureKit
 import CoreMedia
@@ -110,6 +111,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, SCStre
                     print("PowerPoint inventory: \(documents.count) exact presentation(s); unidentified: \(adapter.hasUnidentifiedPresentations)")
                     for document in documents { print("- \(document.displayName) | \(document.onScreen ? "on screen" : "not on screen")") }
                 } catch { print("PowerPoint inventory failed: \(error.localizedDescription)") }
+                NSApp.terminate(nil)
+            }
+        }
+        if CommandLine.arguments.contains("--powerpoint-ax-check") {
+            Task { @MainActor in
+                let result = PowerPointAdapter().accessibilityInventoryForDiagnostics()
+                print("PowerPoint AX inventory: trusted=\(AXIsProcessTrusted()) windows=\(result.windowCount) exact=\(result.documents.count)")
+                for document in result.documents { print("- \(document.displayName)") }
                 NSApp.terminate(nil)
             }
         }

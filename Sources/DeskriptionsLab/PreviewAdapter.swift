@@ -4,7 +4,6 @@ import DeskriptionsCore
 
 typealias PreviewDocumentObservation = DocumentObservation
 
-@MainActor
 final class PreviewAdapter: DocumentDiscoveryAdapter {
     static let bundleIdentifier = "com.apple.Preview"
     let applicationBundleID = PreviewAdapter.bundleIdentifier
@@ -54,7 +53,7 @@ final class PreviewAdapter: DocumentDiscoveryAdapter {
     /// A bounded retry prevents a transient launch or tab transition from being
     /// misreported as application-only restoration.
     func inventoryWithRetry() async throws -> [PreviewDocumentObservation] {
-        try await inventoryWithRetry(timeout: .seconds(8))
+        try await inventoryWithRetry(timeout: .seconds(2))
     }
 
     func inventoryWithRetry(timeout: Duration) async throws -> [PreviewDocumentObservation] {
@@ -77,6 +76,18 @@ final class PreviewAdapter: DocumentDiscoveryAdapter {
     }
 
     func bringToFront(path: String) throws { try raise(path: path) }
+
+    func observation(forPath path: String) async throws -> DocumentObservation? {
+        guard AXIsProcessTrusted() else { throw AdapterError.accessibilityRequired }
+        guard let (app, _) = matchingWindow(path: path) else { return nil }
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL
+        return DocumentObservation(applicationBundleID: Self.bundleIdentifier,
+                                   applicationBundlePath: app.bundleURL?.path,
+                                   path: normalized.path,
+                                   displayName: normalized.lastPathComponent,
+                                   onScreen: !app.isHidden,
+                                   identityMetadata: ["discovery": "AXDocument-targeted"])
+    }
 
     func restore(_ saved: SavedPreviewDocument) async throws -> PreviewDocumentObservation {
         try await DocumentRestorer().restore(SavedDocumentReference(saved), using: self)

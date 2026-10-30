@@ -16,7 +16,7 @@ enum ProfileConfigurationStore {
 }
 
 @MainActor
-final class SettingsController: NSObject, NSWindowDelegate {
+final class SettingsController: NSObject, NSWindowDelegate, NSTabViewDelegate {
     struct Actions {
         let chooseWindow: () -> Void, nativeInventory: () -> Void, exportDiagnostics: () -> Void, recentStatus: () -> Void
     }
@@ -40,14 +40,17 @@ final class SettingsController: NSObject, NSWindowDelegate {
     private let afterSavePreferences = AfterSavePreferenceStore()
     private let retentionPreferences = DesktopRetentionPreferences()
     private let desktopStore = try? DesktopStore.applicationSupport()
+    private var lastRefreshAt = Date.distantPast
+    private var lastRefreshPage: String?
+    private var integrationIconCache: [String: NSImage] = [:]
 
     init(shortcuts: ShortcutManager, actions: Actions) { self.shortcuts = shortcuts; self.actions = actions }
 
     func show(page: String? = nil) {
         if window == nil { build() }
         if let page, let item = tabs.tabViewItems.first(where: { $0.label == page }) { tabs.selectTabViewItem(item) }
+        refreshAll()
         window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        refreshExtensions(); refreshDiagnostics(); refreshLoginStatus(); refreshDesktopManagement()
     }
 
     private func build() {
@@ -59,7 +62,7 @@ final class SettingsController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.title = "Deskriptions Settings"; window.minSize = NSSize(width: 680, height: 500); window.center(); window.delegate = self
         self.window = window
-        let tabs = NSTabView(frame: NSRect(x: 16, y: 16, width: 728, height: 538)); tabs.autoresizingMask = [.width, .height]; window.contentView?.addSubview(tabs); self.tabs = tabs
+        let tabs = NSTabView(frame: NSRect(x: 16, y: 16, width: 728, height: 538)); tabs.autoresizingMask = [.width, .height]; tabs.delegate = self; window.contentView?.addSubview(tabs); self.tabs = tabs
         addTab("General", view: generalView()); addTab("Keyboard Shortcuts", view: shortcutsView()); addTab("Extensions", view: extensionsView()); addTab("Diagnostics", view: diagnosticsView()); addTab("Credits", view: creditsView())
     }
 
@@ -69,8 +72,20 @@ final class SettingsController: NSObject, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        refreshExtensions(); refreshDiagnostics()
+        guard Date().timeIntervalSince(lastRefreshAt) > 0.75 else { return }
+        refreshAll()
     }
+
+    private func refreshAll() {
+        let selected = tabs?.selectedTabViewItem?.label
+        guard selected != lastRefreshPage || Date().timeIntervalSince(lastRefreshAt) > 0.75 else { return }
+        lastRefreshAt = Date(); lastRefreshPage = selected
+        if selected == "Extensions" { refreshExtensions() }
+        if selected == "Diagnostics" { refreshDiagnostics() }
+        if selected == "General" { refreshLoginStatus(); refreshDesktopManagement() }
+    }
+
+    func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) { refreshAll() }
 
     func runLifecycleStress(cycles: Int) async -> Bool {
         show()
@@ -283,7 +298,8 @@ final class SettingsController: NSObject, NSWindowDelegate {
         }
         let previewRow = extensionRow(title: "Preview documents", detail: AXIsProcessTrusted() ? "● Available · Accessibility access granted" : "● Unavailable · Accessibility access is required for exact documents", green: AXIsProcessTrusted(), bundleID: PreviewAdapter.bundleIdentifier, metadata: AXIsProcessTrusted() ? "Native integration · exact AXDocument file identity, Preview-specific opening, and verification" : "Native integration · choose Grant Access, approve the running /Applications/Deskriptions.app in Privacy & Security → Accessibility, then relaunch Deskriptions if macOS does not apply the grant immediately", actionTitle: AXIsProcessTrusted() ? "Recheck" : "Grant Access…", action: #selector(grantPreviewAccessibility))
         let powerPointInstalled = NSWorkspace.shared.urlForApplication(withBundleIdentifier: PowerPointAdapter.bundleIdentifier) != nil
-        let powerPointRow = extensionRow(title: "Microsoft PowerPoint presentations", detail: powerPointInstalled ? "● Available · Automation permission requested when used" : "● Unavailable · Microsoft PowerPoint is not installed", green: powerPointInstalled, bundleID: PowerPointAdapter.bundleIdentifier, metadata: "Native integration · exact presentation full-name identity, explicit PowerPoint opening, and verification. If access was denied, enable Deskriptions → Microsoft PowerPoint in Privacy & Security → Automation.", actionTitle: powerPointInstalled ? "Open Settings…" : nil, action: powerPointInstalled ? #selector(openAutomationSettings) : nil)
+        let powerPointDetail = !powerPointInstalled ? "● Unavailable · Microsoft PowerPoint is not installed" : AXIsProcessTrusted() ? "● Available · Accessibility enabled; Automation may be requested for multiple files" : "● Unavailable · grant Accessibility for exact presentation identity"
+        let powerPointRow = extensionRow(title: "Microsoft PowerPoint presentations", detail: powerPointDetail, green: powerPointInstalled && AXIsProcessTrusted(), bundleID: PowerPointAdapter.bundleIdentifier, metadata: "Native integration · exact AXDocument identity with PowerPoint Automation fallback for multiple presentations, explicit PowerPoint opening, and verification.", actionTitle: powerPointInstalled ? "Open Settings…" : nil, action: powerPointInstalled ? #selector(openAutomationSettings) : nil)
         for row in [
             extensionRow(title: "Finder folders", detail: "● Available · Automation permission requested when used", green: true, bundleID: "com.apple.finder", metadata: "Native integration · exact folder identity and reopening"),
             previewRow,
@@ -310,7 +326,13 @@ final class SettingsController: NSObject, NSWindowDelegate {
         let hasProfile = profile != nil || profileIdentity != nil
         let row = NSView(frame: NSRect(x: 0, y: 0, width: 620, height: hasProfile ? 112 : 76)); row.translatesAutoresizingMaskIntoConstraints = false
         let icon = NSImageView(); icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.image = bundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: "Integration")
+        if let bundleID {
+            if let cached = integrationIconCache[bundleID] { icon.image = cached }
+            else {
+                let resolved = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: "Integration")!
+                integrationIconCache[bundleID] = resolved; icon.image = resolved
+            }
+        } else { icon.image = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: "Integration") }
         let t = NSTextField(labelWithString: title); t.translatesAutoresizingMaskIntoConstraints = false; t.font = .systemFont(ofSize: 13, weight: .semibold)
         let d = NSTextField(labelWithString: detail); d.translatesAutoresizingMaskIntoConstraints = false; d.textColor = green ? .systemGreen : .systemRed
         let m = NSTextField(wrappingLabelWithString: metadata); m.translatesAutoresizingMaskIntoConstraints = false; m.textColor = .secondaryLabelColor; m.maximumNumberOfLines = 2

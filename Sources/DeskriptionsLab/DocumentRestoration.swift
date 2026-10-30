@@ -15,17 +15,21 @@ struct DocumentObservation: Equatable {
     }
 }
 
-@MainActor
 protocol DocumentDiscoveryAdapter: AnyObject {
     var applicationBundleID: String { get }
     var applicationDisplayName: String { get }
     func inventoryWithRetry() async throws -> [DocumentObservation]
+    func observation(forPath path: String) async throws -> DocumentObservation?
     func bringToFront(path: String) throws
     func close(path: String) async throws -> Bool
 }
 
 extension DocumentDiscoveryAdapter {
     func close(path: String) async throws -> Bool { false }
+    func observation(forPath path: String) async throws -> DocumentObservation? {
+        let wanted = URL(fileURLWithPath: path).standardizedFileURL.path
+        return try await inventoryWithRetry().first { URL(fileURLWithPath: $0.path).standardizedFileURL.path == wanted }
+    }
 }
 
 @MainActor
@@ -57,7 +61,7 @@ final class DocumentRestorer {
             throw RestorationError.unavailable(saved.path)
         }
 
-        if let existing = try await adapter.inventoryWithRetry().first(where: { standardized($0.path) == fileURL.path }) {
+        if let existing = try await adapter.observation(forPath: fileURL.path) {
             try adapter.bringToFront(path: fileURL.path)
             return existing
         }
@@ -75,7 +79,7 @@ final class DocumentRestorer {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         repeat {
-            if let verified = try? await adapter.inventoryWithRetry().first(where: { standardized($0.path) == fileURL.path }) {
+            if let verified = try? await adapter.observation(forPath: fileURL.path) {
                 try adapter.bringToFront(path: fileURL.path)
                 return verified
             }

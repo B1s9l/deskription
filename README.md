@@ -45,7 +45,7 @@ For development:
 
 ```sh
 ./scripts/build-app.sh
-open '.build/Deskriptions-1.0.7-build44.app'
+open '.build/Deskriptions-1.0.9-build48.app'
 ```
 
 ### Developer ID distribution and notarization
@@ -76,7 +76,7 @@ The global event monitor may require **Input Monitoring** on some macOS configur
 
 Finder rows contain exact folder locations obtained from Finder, not paths guessed from window titles. Selected folders are persisted and reopened in verified Finder windows during load. Finder does not expose every tab in a window through its supported scripting interface, so Deskriptions deliberately leaves Finder windows open after saving rather than risk closing an unselected tab.
 
-Preview and Microsoft PowerPoint use the shared exact-document restoration path. Preview discovers public `AXDocument` file URLs with Accessibility permission. PowerPoint uses its public Automation dictionary to discover saved presentations by exact full path. Each file is reopened explicitly with its original application and verified; unsaved, inaccessible, or unidentified content falls back to application-only restoration. Apple Notes has a privacy-limited built-in adapter using its supported scripting dictionary: it saves only the stable identifier and name of the currently selected note and reopens that exact note without reading its body. Notes remains open after saving because selective closure cannot be verified safely.
+Preview and Microsoft PowerPoint use the shared exact-document restoration path. Both prefer public `AXDocument` file URLs with Accessibility permission; PowerPoint uses its public Automation dictionary as a bounded fallback for multiple saved presentations. Each file is reopened explicitly with its original application and verified; unsaved, inaccessible, or unidentified content falls back to application-only restoration. Apple Notes has a privacy-limited built-in adapter using its supported scripting dictionary: it saves only the stable identifier and name of the currently selected note and reopens that exact note without reading its body. Notes remains open after saving because selective closure cannot be verified safely.
 
 Live previews use ScreenCaptureKit with bounded automatic recovery for stream interruptions, display changes, and unambiguous window recreation during fullscreen transitions. Capture recovery cannot force browsers or other source applications to generate new video frames when they deliberately throttle background rendering; protected content can remain blank.
 

@@ -43,6 +43,12 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
     private var faviconCache: [String: NSImage] = [:]
     private var faviconLoads = Set<String>()
     private var applicationIconCache: [String: NSImage] = [:]
+    private var inventoryTask: Task<Void, Never>?
+    private var inventoryGeneration = UUID()
+    private var inventoryLoading = false
+    private var inventoryErrors: [String] = []
+    private var saveButton: NSButton?
+    private var inventoryNote: NSTextField?
 
     override init() {
         store = (try? .applicationSupport()) ?? DesktopStore(directory: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("Deskriptions-Desktops"))
@@ -54,53 +60,21 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
 
     func openSaveDesktop() {
         NSApp.activate(ignoringOtherApps: true)
-        Task {
-            var connected = await bridge.connectedProfiles()
-            for profile in connected { _ = try? await bridge.send(.init(type: "freshInventory"), to: profile.installationID, browserBundleID: profile.browser, timeout: 5) }
-            connected = await bridge.connectedProfiles()
-            let native = allNativeWindows()
-            let finder = Result { try finderAdapter.inventory() }, notes = Result { try notesAdapter.inventory() }
-            var discoveredDocuments: [DocumentObservation] = []
-            var documentErrors: [String] = []
-            for adapter in documentAdapters {
-                do { discoveredDocuments += try await adapter.inventoryWithRetry() }
-                catch { documentErrors.append(error.localizedDescription) }
-            }
-            var dedicated = Set(connected.map(\.browser))
-            if discoveredDocuments.contains(where: { $0.applicationBundleID == PreviewAdapter.bundleIdentifier }) { dedicated.insert(PreviewAdapter.bundleIdentifier) }
-            if discoveredDocuments.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) && !powerPointAdapter.hasUnidentifiedPresentations { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
-            if (try? notes.get().isEmpty) == false { dedicated.insert(NotesAdapter.bundleIdentifier) }
-            let generic = genericAdapter.inventory(nativeWindows: native, ownBundleID: Bundle.main.bundleIdentifier, integratedBrowserBundleIDs: dedicated)
-            await presentSave(profiles: connected, finderFolders: (try? finder.get()) ?? [], documents: discoveredDocuments, notes: (try? notes.get()) ?? [], genericApplications: generic, integrationErrors: [finder.failureDescription, notes.failureDescription].compactMap { $0 } + documentErrors)
-        }
+        guard activeSaveAlert == nil else { activeSaveAlert?.window.makeKeyAndOrderFront(nil); return }
+        Task { await presentSave() }
     }
 
-    private func presentSave(profiles: [ExtensionHello], finderFolders: [FinderFolderObservation], documents: [DocumentObservation], notes: [NoteObservation], genericApplications: [GenericApplicationObservation], integrationErrors: [String]) async {
+    private func presentSave() async {
         initialAll = UserDefaults.standard.bool(forKey: "initialSelectionAll")
-        self.profiles = profiles; self.associations = buildAssociations(profiles)
-        self.finderFolders = finderFolders
-        self.documents = documents; self.noteObservations = notes
-        self.genericApplications = genericApplications
+        profiles = []; associations = [:]; finderFolders = []; documents = []; noteObservations = []; genericApplications = []
+        inventoryErrors = []; inventoryLoading = true
         selection = DesktopSelection()
         selectedFinderWindowIDs.removeAll()
         selectedDocumentKeys.removeAll(); selectedNoteIDs.removeAll()
         selectedGenericBundleIDs.removeAll()
-        if initialAll { for profile in profiles { profile.windows.forEach { selection.set(window: $0, profileID: profile.identityKey, selected: true) } } }
-        else {
-            for profile in profiles { for window in profile.windows {
-                let match = associations[profile.identityKey]?.first { $0.browserWindowID == window.extensionWindowID }
-                if let nativeID = match?.nativeWindowID, nativeWindow(nativeID)?.onScreen == true { selection.set(window: window, profileID: profile.identityKey, selected: true) }
-            }}
-        }
-        if initialAll { selectedFinderWindowIDs = Set(finderFolders.map(\.windowID)) }
-        else { selectedFinderWindowIDs = Set(finderFolders.filter(\.onScreen).map(\.windowID)) }
-        selectedDocumentKeys = Set(documents.filter { initialAll || $0.onScreen }.map(\.identityKey))
-        selectedNoteIDs = Set(notes.filter { initialAll || $0.onScreen }.map(\.identifier))
-        selectedGenericBundleIDs = ApplicationFallback.initialSelection(visibility: Dictionary(uniqueKeysWithValues: genericApplications.map { ($0.bundleIdentifier, $0.hasOnScreenWindow) }), selectAll: initialAll)
         rebuildRows()
         let alert = NSAlert(); alert.messageText = "Save Desktop"; alert.informativeText = "Choose what to include."
-        let finderStatus = integrationErrors.isEmpty ? " Finder folders and supported Preview/Notes items can be reopened by their verified identities." : " Some built-in integrations are unavailable: \(integrationErrors.joined(separator: " "))"
-        let explanation = "Select supported windows or contents. Windows not confirmed on screen remain available for manual selection. On screen does not mean unobscured. Application-only items reopen the application but remain open after saving; window contents are not restored." + finderStatus
+        let explanation = "Select supported windows or contents. Windows not confirmed on screen remain available for manual selection. On screen does not mean unobscured. Application-only items reopen the application but remain open after saving; window contents are not restored."
         alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Cancel")
         alert.buttons[0].keyEquivalent = "\r"; alert.buttons[1].keyEquivalent = "\u{1b}"
         let containerHeight: CGFloat = 455
@@ -124,10 +98,154 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
         if !withoutFavicons.isEmpty { notices.append("Reload the matching browser extension to enable reliable tab favicons.") }
         let note = NSTextField(labelWithString: notices.joined(separator: " ")); note.frame = NSRect(x: 235, y: 25, width: 440, height: 34); note.maximumNumberOfLines = 2; note.textColor = .secondaryLabelColor; container.addSubview(note)
         alert.accessoryView = container; table.reloadData()
+        saveButton = alert.buttons[0]; saveButton?.isEnabled = false
+        inventoryNote = note; note.stringValue = "Collecting open windows…"
         (alert.window.fieldEditor(true, for: name) as? NSTextView)?.allowsUndo = true
+        let generation = UUID(); inventoryGeneration = generation
+        inventoryTask?.cancel()
+        inventoryTask = Task { [weak self] in await self?.loadSaveInventory(generation: generation) }
         let answer = await presentSaveAlert(alert)
         if answer == .alertFirstButtonReturn { commitSave() }
-        self.table = nil; nameField = nil
+        inventoryTask?.cancel(); inventoryTask = nil; inventoryGeneration = UUID()
+        status.hide(); self.table = nil; nameField = nil; saveButton = nil; inventoryNote = nil
+    }
+
+    private func loadSaveInventory(generation: UUID) async {
+        let started = ContinuousClock.now
+        let banner = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled, let self, self.inventoryGeneration == generation, self.inventoryLoading else { return }
+            self.status.show(title: "Collecting open windows…", detail: "Checking connected applications and document integrations.", duration: 30)
+        }
+        let initiallyConnected = await bridge.connectedProfiles()
+        inventoryNote?.stringValue = "Checking Finder, Notes, Preview, and PowerPoint…"
+        status.update(title: "Collecting open windows…", detail: "Checking PowerPoint documents and native integrations.")
+
+        let native = allNativeWindows()
+        mergeProfiles(initiallyConnected, nativeWindows: native)
+        var errors: [String] = []
+        await withTaskGroup(of: InventoryPart.self) { group in
+            group.addTask { [weak self] in .profiles(await self?.refreshedProfiles(initiallyConnected) ?? []) }
+            group.addTask { [finderAdapter] in
+                do { return .finder(try finderAdapter.inventory(), nil) }
+                catch { return .finder([], error.localizedDescription) }
+            }
+            group.addTask { [notesAdapter] in
+                do { return .notes(try notesAdapter.inventory(), nil) }
+                catch { return .notes([], error.localizedDescription) }
+            }
+            group.addTask { [previewAdapter] in
+                do { return .documents(PreviewAdapter.bundleIdentifier, try await previewAdapter.inventoryWithRetry(), nil) }
+                catch { return .documents(PreviewAdapter.bundleIdentifier, [], error.localizedDescription) }
+            }
+            group.addTask { [powerPointAdapter] in
+                do { return .documents(PowerPointAdapter.bundleIdentifier, try await powerPointAdapter.inventoryWithRetry(), nil) }
+                catch { return .documents(PowerPointAdapter.bundleIdentifier, [], error.localizedDescription) }
+            }
+            for await part in group {
+                guard !Task.isCancelled, inventoryGeneration == generation else { group.cancelAll(); return }
+                switch part {
+                case .profiles(let updated): mergeProfiles(updated, nativeWindows: native)
+                case .finder(let folders, let error): mergeFinder(folders); if let error { errors.append(error) }
+                case .notes(let notes, let error): mergeNotes(notes); if let error { errors.append(error) }
+                case .documents(let bundleID, let observations, let error): mergeDocuments(observations, bundleID: bundleID); if let error { errors.append(error) }
+                }
+                rebuildRows(); table?.reloadData()
+            }
+        }
+        guard !Task.isCancelled, inventoryGeneration == generation else { banner.cancel(); return }
+        let connected = profiles
+        let discovered = documents
+
+        var dedicated = Set(connected.map(\.browser))
+        if discovered.contains(where: { $0.applicationBundleID == PreviewAdapter.bundleIdentifier }) { dedicated.insert(PreviewAdapter.bundleIdentifier) }
+        // Partial discovery must not leak a second generic PowerPoint group with
+        // the same windows. If no exact file is found, generic fallback remains.
+        if discovered.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
+        if !noteObservations.isEmpty { dedicated.insert(NotesAdapter.bundleIdentifier) }
+        let ownBundleID = Bundle.main.bundleIdentifier
+        let generic = await Task.detached(priority: .userInitiated) {
+            GenericApplicationAdapter().inventory(nativeWindows: native, ownBundleID: ownBundleID, integratedBrowserBundleIDs: dedicated)
+        }.value
+        guard !Task.isCancelled, inventoryGeneration == generation else { banner.cancel(); return }
+        inventoryLoading = false
+        genericApplications = generic
+        selectedGenericBundleIDs.formIntersection(Set(generic.map(\.bundleIdentifier)))
+        let unseenGeneric = generic.filter { !selectedGenericBundleIDs.contains($0.bundleIdentifier) }
+        selectedGenericBundleIDs.formUnion(ApplicationFallback.initialSelection(visibility: Dictionary(uniqueKeysWithValues: unseenGeneric.map { ($0.bundleIdentifier, $0.hasOnScreenWindow) }), selectAll: initialAll))
+        inventoryErrors = errors; rebuildRows(); table?.reloadData()
+        saveButton?.isEnabled = true
+        inventoryNote?.stringValue = errors.isEmpty ? "Inventory ready." : "Inventory ready; some integrations were unavailable. Details are in Recent Status."
+        if !errors.isEmpty { status.record(title: "Inventory completed with limitations", detail: errors.joined(separator: " ")) }
+        banner.cancel(); status.hide()
+        let elapsed = started.duration(to: .now)
+        status.record(title: "Save Desktop inventory ready", detail: "The window appeared before collection; inventory completed in \(elapsed.formatted(.units(allowed: [.seconds, .milliseconds], width: .abbreviated))).")
+    }
+
+    private func refreshedProfiles(_ profiles: [ExtensionHello]) async -> [ExtensionHello] {
+        await withTaskGroup(of: Void.self) { group in
+            for profile in profiles {
+                group.addTask { [bridge] in
+                    _ = try? await bridge.send(.init(type: "freshInventory"), to: profile.installationID, browserBundleID: profile.browser, timeout: 5)
+                }
+            }
+        }
+        return await bridge.connectedProfiles()
+    }
+
+    private func mergeProfiles(_ updated: [ExtensionHello], nativeWindows: [NativeWindow]) {
+        let oldAvailable = Set(profiles.flatMap { profile in profile.windows.flatMap(\.tabs).map { ContentIdentity(profileID: profile.identityKey, tabID: $0.id) } })
+        profiles = updated; associations = buildAssociations(updated, nativeWindows: nativeWindows)
+        let available = Set(updated.flatMap { profile in profile.windows.flatMap(\.tabs).map { ContentIdentity(profileID: profile.identityKey, tabID: $0.id) } })
+        selection.content.formIntersection(available)
+        let nativeByID = Dictionary(uniqueKeysWithValues: nativeWindows.map { ($0.windowID, $0) })
+        for profile in updated { for window in profile.windows {
+            let match = associations[profile.identityKey]?.first { $0.browserWindowID == window.extensionWindowID }
+            let shouldSelect = initialAll || match?.nativeWindowID.flatMap { nativeByID[$0]?.onScreen } == true
+            for tab in window.tabs where !oldAvailable.contains(ContentIdentity(profileID: profile.identityKey, tabID: tab.id)) {
+                if shouldSelect { selection.set(tabID: tab.id, profileID: profile.identityKey, selected: true) }
+            }
+        } }
+    }
+
+    private func mergeFinder(_ updated: [FinderFolderObservation]) {
+        let previous = Set(finderFolders.map(\.windowID)); let available = Set(updated.map(\.windowID))
+        selectedFinderWindowIDs.formIntersection(available); finderFolders = updated
+        selectedFinderWindowIDs.formUnion(updated.filter { !previous.contains($0.windowID) && (initialAll || $0.onScreen) }.map(\.windowID))
+    }
+
+    private func mergeDocuments(_ updated: [DocumentObservation], bundleID: String) {
+        let previous = Set(documents.filter { $0.applicationBundleID == bundleID }.map(\.identityKey))
+        let available = Set(updated.map(\.identityKey)); selectedDocumentKeys.subtract(previous.subtracting(available))
+        documents.removeAll { $0.applicationBundleID == bundleID }; documents += deduplicatedDocuments(updated)
+        selectedDocumentKeys.formUnion(updated.filter { !previous.contains($0.identityKey) && (initialAll || $0.onScreen) }.map(\.identityKey))
+    }
+
+    private func mergeNotes(_ updated: [NoteObservation]) {
+        let previous = Set(noteObservations.map(\.identifier)); let available = Set(updated.map(\.identifier))
+        selectedNoteIDs.formIntersection(available); noteObservations = updated
+        selectedNoteIDs.formUnion(updated.filter { !previous.contains($0.identifier) && (initialAll || $0.onScreen) }.map(\.identifier))
+    }
+
+    private func applyInventory(profiles: [ExtensionHello], nativeWindows: [NativeWindow], finder: [FinderFolderObservation], documents: [DocumentObservation], notes: [NoteObservation], generic: [GenericApplicationObservation], errors: [String]) {
+        self.profiles = profiles; associations = buildAssociations(profiles, nativeWindows: nativeWindows)
+        finderFolders = finder; self.documents = documents; noteObservations = notes; genericApplications = generic; inventoryErrors = errors
+        if initialAll { for profile in profiles { profile.windows.forEach { selection.set(window: $0, profileID: profile.identityKey, selected: true) } } }
+        else {
+            let nativeByID = Dictionary(uniqueKeysWithValues: nativeWindows.map { ($0.windowID, $0) })
+            for profile in profiles { for window in profile.windows { let match = associations[profile.identityKey]?.first { $0.browserWindowID == window.extensionWindowID }; if let id = match?.nativeWindowID, nativeByID[id]?.onScreen == true { selection.set(window: window, profileID: profile.identityKey, selected: true) } } }
+        }
+        selectedFinderWindowIDs = Set(finder.filter { initialAll || $0.onScreen }.map(\.windowID))
+        selectedDocumentKeys = Set(documents.filter { initialAll || $0.onScreen }.map(\.identityKey))
+        selectedNoteIDs = Set(notes.filter { initialAll || $0.onScreen }.map(\.identifier))
+        selectedGenericBundleIDs = ApplicationFallback.initialSelection(visibility: Dictionary(uniqueKeysWithValues: generic.map { ($0.bundleIdentifier, $0.hasOnScreenWindow) }), selectAll: initialAll)
+        rebuildRows(); table?.reloadData()
+    }
+
+    private func deduplicatedDocuments(_ observations: [DocumentObservation]) -> [DocumentObservation] {
+        observations.reduce(into: []) { result, item in
+            if !result.contains(where: { $0.identityKey == item.identityKey }) { result.append(item) }
+        }
     }
 
     private func presentSaveAlert(_ alert: NSAlert) async -> NSApplication.ModalResponse {
@@ -155,6 +273,7 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
     private func finishSaveDialog(response: NSApplication.ModalResponse) {
         guard let continuation = saveDialogContinuation else { return }
         saveDialogContinuation = nil
+        inventoryTask?.cancel()
         activeSaveAlert?.window.orderOut(nil); activeSaveAlert = nil
         continuation.resume(returning: response)
     }
@@ -197,52 +316,79 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
         case .note(let index): if selected { selectedNoteIDs.insert(noteObservations[index].identifier) } else { selectedNoteIDs.remove(noteObservations[index].identifier) }
         case .genericApplication(let index): if selected { selectedGenericBundleIDs.insert(genericApplications[index].bundleIdentifier) } else { selectedGenericBundleIDs.remove(genericApplications[index].bundleIdentifier) }
         case .genericWindow(let index): if selected { selectedGenericBundleIDs.insert(genericApplications[index].bundleIdentifier) } else { selectedGenericBundleIDs.remove(genericApplications[index].bundleIdentifier) }
-        case .unsupported: break
+        case .loading, .unsupported: break
         }
         rebuildRows(); table?.reloadData()
     }
 
     private func commitSave() {
+        guard !inventoryLoading else { status.show(title: "Still collecting open windows…", detail: "Wait for inventory collection to finish so selected content is not omitted."); return }
         guard !selection.content.isEmpty || !selectedFinderWindowIDs.isEmpty || !selectedDocumentKeys.isEmpty || !selectedNoteIDs.isEmpty || !selectedGenericBundleIDs.isEmpty else { show("Nothing selected", "Select at least one supported item."); return }
         let name = nameField?.stringValue.isEmpty == false ? nameField!.stringValue : defaultName()
         let directories = Dictionary(uniqueKeysWithValues: profiles.compactMap { profile in ProfileConfigurationStore.path(browser:profile.browser,installationID:profile.installationID).map { (profile.identityKey,$0) } })
         let selected = selection.content
         Task {
-            let selectedProfileIDs = Set(selected.map(\.profileID))
-            for profile in profiles where selectedProfileIDs.contains(profile.identityKey) {
-                do { _ = try await bridge.send(.init(type: "freshInventory"), to: profile.installationID, browserBundleID: profile.browser, timeout: 35) }
-                catch { await MainActor.run { show("Desktop wasn’t saved", "Fresh \(ChromiumBrowser.displayName(for: profile.browser)) state was required but unavailable: \(error.localizedDescription)") }; return }
+            let saveBanner = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled else { return }
+                self?.status.show(title: "Saving Desktop…", detail: "Verifying selected content before saving.", duration: 30)
             }
+            defer { saveBanner.cancel() }
+            let selectedProfileIDs = Set(selected.map(\.profileID))
+            let selectedProfiles = profiles.filter { selectedProfileIDs.contains($0.identityKey) }
+            let browserErrors = await withTaskGroup(of: String?.self, returning: [String].self) { group in
+                for profile in selectedProfiles {
+                    group.addTask { [bridge] in
+                        do { _ = try await bridge.send(.init(type: "freshInventory"), to: profile.installationID, browserBundleID: profile.browser, timeout: 12); return nil }
+                        catch { return "Fresh \(ChromiumBrowser.displayName(for: profile.browser)) state was required but unavailable: \(error.localizedDescription)" }
+                    }
+                }
+                var failures: [String] = []
+                for await failure in group { if let failure { failures.append(failure) } }
+                return failures
+            }
+            guard browserErrors.isEmpty else { show("Desktop wasn’t saved", browserErrors.joined(separator: " ")); return }
             let fresh = await bridge.connectedProfiles()
             let available = Set(fresh.flatMap { profile in profile.windows.flatMap(\.tabs).map { ContentIdentity(profileID: profile.identityKey, tabID: $0.id) } })
             guard selected.isSubset(of: available) else {
                 await MainActor.run { show("Inventory changed", "A selected tab moved or disappeared. Review the inventory and save again; nothing was closed.") }; return
             }
+            async let finderWork = Task.detached(priority: .userInitiated) { [finderAdapter, selectedFinderWindowIDs] in
+                Result { selectedFinderWindowIDs.isEmpty ? [] : try finderAdapter.inventory() }
+            }.value
+            async let notesWork = Task.detached(priority: .userInitiated) { [notesAdapter, selectedNoteIDs] in
+                Result { selectedNoteIDs.isEmpty ? [] : try notesAdapter.inventory() }
+            }.value
+            async let previewWork = selectedDocumentKeys.contains(where: { $0.hasPrefix("\(PreviewAdapter.bundleIdentifier)|") })
+                ? Task.detached(priority: .userInitiated) { [previewAdapter] in try await previewAdapter.inventoryWithRetry() }.value : []
+            async let powerPointWork = selectedDocumentKeys.contains(where: { $0.hasPrefix("\(PowerPointAdapter.bundleIdentifier)|") })
+                ? Task.detached(priority: .userInitiated) { [powerPointAdapter] in try await powerPointAdapter.inventoryWithRetry() }.value : []
+            let finderResult = await finderWork
+            let notesResult = await notesWork
             let freshFinder: [FinderFolderObservation]
-            if selectedFinderWindowIDs.isEmpty { freshFinder = [] }
-            else {
-                do { freshFinder = try finderAdapter.inventory() }
-                catch { show("Desktop wasn’t saved", "Fresh Finder state was required but unavailable: \(error.localizedDescription)"); return }
-            }
+            do { freshFinder = try finderResult.get() }
+            catch { show("Desktop wasn’t saved", "Fresh Finder state was required but unavailable: \(error.localizedDescription)"); return }
             let selectedFinder = finderFolders.filter { selectedFinderWindowIDs.contains($0.windowID) }
             guard selectedFinder.allSatisfy({ selected in freshFinder.contains(where: { $0.windowID == selected.windowID && standardized($0.path) == standardized(selected.path) }) }) else {
                 show("Inventory changed", "A selected Finder window changed or disappeared. Review the inventory and save again; nothing was closed."); return
             }
-            var freshDocuments: [DocumentObservation] = []
-            for adapter in documentAdapters where selectedDocumentKeys.contains(where: { $0.hasPrefix("\(adapter.applicationBundleID)|") }) {
-                do { freshDocuments += try await adapter.inventoryWithRetry() }
-                catch { show("Desktop wasn’t saved", error.localizedDescription); return }
-            }
+            let freshDocuments: [DocumentObservation]
+            do { freshDocuments = try await previewWork + powerPointWork }
+            catch { show("Desktop wasn’t saved", error.localizedDescription); return }
             guard selectedDocumentKeys.isSubset(of: Set(freshDocuments.map(\.identityKey))) else { show("Inventory changed", "A selected document changed or disappeared. Review the inventory and save again; nothing was closed."); return }
             let freshNotes: [NoteObservation]
-            do { freshNotes = selectedNoteIDs.isEmpty ? [] : try notesAdapter.inventory() }
+            do { freshNotes = try notesResult.get() }
             catch { show("Desktop wasn’t saved", error.localizedDescription); return }
             guard selectedNoteIDs.isSubset(of: Set(freshNotes.map(\.identifier))) else { show("Inventory changed", "A selected note changed or disappeared. Review the inventory and save again; nothing was closed."); return }
             var dedicated = Set(fresh.map(\.browser))
             if freshDocuments.contains(where: { $0.applicationBundleID == PreviewAdapter.bundleIdentifier }) { dedicated.insert(PreviewAdapter.bundleIdentifier) }
-            if freshDocuments.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) && !powerPointAdapter.hasUnidentifiedPresentations { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
+            if freshDocuments.contains(where: { $0.applicationBundleID == PowerPointAdapter.bundleIdentifier }) { dedicated.insert(PowerPointAdapter.bundleIdentifier) }
             if !freshNotes.isEmpty { dedicated.insert(NotesAdapter.bundleIdentifier) }
-            let freshGeneric = genericAdapter.inventory(nativeWindows: allNativeWindows(), ownBundleID: Bundle.main.bundleIdentifier, integratedBrowserBundleIDs: dedicated)
+            let nativeSnapshot = allNativeWindows()
+            let ownBundleID = Bundle.main.bundleIdentifier
+            let freshGeneric = await Task.detached(priority: .userInitiated) {
+                GenericApplicationAdapter().inventory(nativeWindows: nativeSnapshot, ownBundleID: ownBundleID, integratedBrowserBundleIDs: dedicated)
+            }.value
             guard selectedGenericBundleIDs.isSubset(of: Set(freshGeneric.map(\.bundleIdentifier))) else {
                 show("Inventory changed", "A selected application closed or became unavailable. Review the inventory and save again; nothing was closed."); return
             }
@@ -252,7 +398,8 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func persistAndFinish(name: String, directories: [String: String], freshProfiles: [ExtensionHello], freshFinder: [FinderFolderObservation], freshDocuments: [DocumentObservation], freshNotes: [NoteObservation], freshGeneric: [GenericApplicationObservation]) {
         profiles = freshProfiles
-        associations = buildAssociations(freshProfiles)
+        let nativeSnapshot = allNativeWindows()
+        associations = buildAssociations(freshProfiles, nativeWindows: nativeSnapshot)
         let savedProfiles = freshProfiles.compactMap { profile -> BrowserProfileState? in
             let matches = associations[profile.identityKey] ?? []
             let windows = profile.windows.compactMap { window -> SavedWindow? in
@@ -571,7 +718,8 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
             else { icon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "Website"); loadFavicon(dataURL) }
         } else if case .tab = item.kind { icon.image = NSImage(systemSymbolName: "globe", accessibilityDescription: "Website") }
         else if case .unsupported = item.kind { icon.image = NSImage(systemSymbolName: "app.dashed", accessibilityDescription: "Application") }
-        switch item.kind { case .unsupported: button.isEnabled = false; button.state = .off; default: button.state = item.state == .on ? .on : item.state == .mixed ? .mixed : .off }
+        else if case .loading = item.kind { icon.image = NSImage(systemSymbolName: "hourglass", accessibilityDescription: "Loading") }
+        switch item.kind { case .unsupported, .loading: button.isEnabled = false; button.state = .off; default: button.state = item.state == .on ? .on : item.state == .mixed ? .mixed : .off }
         button.toolTip = item.toolTip
         button.lineBreakMode = .byTruncatingTail
         container.addSubview(icon); container.addSubview(button); return container
@@ -579,6 +727,7 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
 
     private func rebuildRows() {
         rows=[]
+        if inventoryLoading { rows.append(.init(kind: .loading, title: "Collecting open windows…", indent: 0, state: .off, toolTip: "Saving is enabled after every inventory source finishes or times out.")) }
         for (pi,p) in profiles.enumerated(){rows.append(.init(kind:.profile(pi),title:"\(ChromiumBrowser.displayName(for:p.browser)) profile \(p.installationID.prefix(8))",indent:0,state:profileState(p),applicationBundleID:p.browser))
             for (wi,w) in p.windows.enumerated(){rows.append(.init(kind:.window(pi,wi),title:"Window \(w.extensionWindowID)",indent:1,state:selection.state(for:w,profileID:p.identityKey),applicationBundleID:p.browser));for tab in w.tabs.sorted(by:{$0.index<$1.index}){rows.append(.init(kind:.tab(pi,wi,tab.id),title:"\(tab.pinned ? "Pinned — " : "")\(tab.title.isEmpty ? tab.url : tab.title)",indent:2,state:selection.contains(tabID:tab.id,profileID:p.identityKey) ? .on:.off,faviconDataURL:tab.faviconDataURL))}}
         }
@@ -612,15 +761,13 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
     }
     private func profileState(_ p:ExtensionHello)->SelectionState{let states=p.windows.map{selection.state(for:$0,profileID:p.identityKey)};return states.allSatisfy{$0 == .off} ? .off : states.allSatisfy{$0 == .on} ? .on:.mixed}
     private func groupState(total: Int, selected: Int) -> SelectionState { selected == 0 ? .off : selected == total ? .on : .mixed }
-    private func buildAssociations(_ ps:[ExtensionHello])->[String:[WindowAssociation]] {
-        let native = allNativeWindows()
+    private func buildAssociations(_ ps:[ExtensionHello], nativeWindows native:[NativeWindow])->[String:[WindowAssociation]] {
         return Dictionary(uniqueKeysWithValues: ps.map { profile in
             let browserWindows = native.filter { NSRunningApplication(processIdentifier: $0.ownerPID)?.bundleIdentifier == profile.browser }
             return (profile.identityKey, WindowMatcher.associate(browser: profile.windows, native: browserWindows))
         })
     }
     private func allNativeWindows()->[NativeWindow]{(CGWindowListCopyWindowInfo([.optionAll,.excludeDesktopElements],kCGNullWindowID) as? [[String:Any]] ?? []).compactMap{r in guard let id=r[kCGWindowNumber as String] as? UInt32,let pid=r[kCGWindowOwnerPID as String] as? Int32,let owner=r[kCGWindowOwnerName as String] as? String,let d=r[kCGWindowBounds as String] as? NSDictionary,let f=CGRect(dictionaryRepresentation:d as CFDictionary),(r[kCGWindowLayer as String] as? Int)==0,(r[kCGWindowAlpha as String] as? Double ?? 1)>0,f.width>=120,f.height>=80 else{return nil};return NativeWindow(windowID:id,ownerPID:pid,ownerName:owner,title:r[kCGWindowName as String] as? String ?? "",bounds:.init(x:f.minX,y:f.minY,width:f.width,height:f.height),onScreen:r[kCGWindowIsOnscreen as String] as? Bool ?? false)}}
-    private func nativeWindow(_ id:UInt32)->NativeWindow?{allNativeWindows().first{$0.windowID==id}}
     private func desktopCounter() -> Int {
         nameCounter.current(existingDesktops: store.list().desktops)
     }
@@ -656,7 +803,13 @@ final class DesktopFlowController: NSObject, NSTableViewDataSource, NSTableViewD
             DispatchQueue.main.async { guard let self else { return }; self.faviconLoads.remove(dataURL); if let image { image.size = NSSize(width: 16, height: 16); self.faviconCache[dataURL] = image; self.table?.reloadData() } }
         }
     }
-    private struct Row { enum Kind{case profile(Int),window(Int,Int),tab(Int,Int,Int),finderGroup,finderFolder(Int),documentGroup(String),document(Int),notesGroup,note(Int),genericApplication(Int),genericWindow(Int),unsupported};let kind:Kind,title:String,indent:Int,state:SelectionState;var applicationBundleID:String?=nil;var faviconDataURL:String?=nil;var toolTip:String?=nil }
+    private enum InventoryPart {
+        case profiles([ExtensionHello])
+        case finder([FinderFolderObservation], String?)
+        case notes([NoteObservation], String?)
+        case documents(String, [DocumentObservation], String?)
+    }
+    private struct Row { enum Kind{case loading,profile(Int),window(Int,Int),tab(Int,Int,Int),finderGroup,finderFolder(Int),documentGroup(String),document(Int),notesGroup,note(Int),genericApplication(Int),genericWindow(Int),unsupported};let kind:Kind,title:String,indent:Int,state:SelectionState;var applicationBundleID:String?=nil;var faviconDataURL:String?=nil;var toolTip:String?=nil }
 }
 
 private extension Result where Failure: Error {

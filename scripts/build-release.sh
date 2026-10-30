@@ -2,7 +2,7 @@
 set -eu
 
 root=${0:A:h:h}
-version=1.0.7
+version=1.0.9
 stage="$root/.build/release-artifacts/Deskriptions-$version"
 app="$stage/Deskriptions.app"
 cache="$root/.build/release-cache"
@@ -23,7 +23,7 @@ cp "$root/app/Info.plist" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName Deskriptions" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier org.deskriptions.app" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 44" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 48" "$app/Contents/Info.plist"
 cp "$root/Assets/AppIcon.iconset/icon_512x512@2x.png" "$app/Contents/Resources/Deskriptions.png"
 chmod 755 "$app/Contents/MacOS/DeskriptionsLab" "$app/Contents/Resources/deskriptions-bridge" "$app/Contents/Resources/deskriptions-bridge-chrome" "$app/Contents/Resources/deskriptions-bridge-brave" "$app/Contents/Resources/deskriptions-bridge-edge"
 if [[ "${DESKRIPTIONS_ALLOW_ADHOC_RELEASE:-0}" == 1 ]]; then
@@ -38,7 +38,7 @@ cp "$root/scripts/install-release-bridge.sh" "$root/scripts/uninstall.sh" "$stag
 cp "$root/native-host/manifest.template.json" "$stage/native-host-manifest.template.json"
 cp "$root/README.md" "$root/docs/API.md" "$root/docs/DESKTOP-FORMAT.md" \
   "$root/docs/TESTER-GUIDE.md" "$root/docs/COMPATIBILITY.md" "$root/docs/KNOWN-ISSUES.md" \
-  "$root/docs/RELEASE-NOTES-1.0.7.md" "$root/docs/PUBLICATION-CHECKLIST.md" "$stage/Documentation/"
+  "$root/docs/RELEASE-NOTES-1.0.9.md" "$root/docs/PUBLICATION-CHECKLIST.md" "$stage/Documentation/"
 cp "$root/THIRD-PARTY-NOTICES.md" "$stage/Documentation/"
 cp "$root/LICENSE" "$stage/Documentation/"
 chmod 755 "$stage/install-release-bridge.sh" "$stage/uninstall.sh"

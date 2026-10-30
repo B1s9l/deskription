@@ -3,7 +3,6 @@ import DeskriptionsCore
 
 struct NoteObservation: Equatable { let identifier: String; let displayName: String; let onScreen: Bool }
 
-@MainActor
 final class NotesAdapter {
     static let bundleIdentifier = "com.apple.Notes"
     enum AdapterError: LocalizedError {
